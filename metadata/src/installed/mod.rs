@@ -45,16 +45,19 @@ impl InstalledMetaData {
             let data = match serde_norway::to_string(&self) {
                 Ok(data) => data,
                 Err(_) => {
-                    return err!("Failed to parse InstalledMetaData into string!");
+                    return err!(
+                        "Failed to parse `{}`'s InstalledMetaData into string!",
+                        self.name
+                    );
                 }
             };
             let mut file = match File::create(path) {
                 Ok(file) => file,
-                Err(_) => return err!("Failed to open file as WO!"),
+                Err(_) => return err!("Failed to open file for `{}` as WO!", self.name),
             };
             match file.write_all(data.as_bytes()) {
                 Ok(_) => Ok(Some(self)),
-                Err(_) => err!("Failed to write to file!"),
+                Err(_) => err!("Failed to write `{}` to file!", self.name),
             }
         } else {
             err!("File is of unexpected type!")

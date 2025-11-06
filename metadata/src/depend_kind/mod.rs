@@ -1,8 +1,8 @@
-use std::{collections::HashSet, process::Command};
+use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 use settings::OriginKind;
-use utils::{Range, VerReq, Version, err};
+use utils::{Range, VerReq, Version, command, err};
 
 use crate::{DepVer, InstallPackage, Specific, processed::ProcessedMetaData};
 
@@ -19,24 +19,18 @@ impl DependKind {
             Self::Latest(latest) => {
                 // let version = VerReq::Eq(Version::parse(&get_latest(latest).await.ok()?).ok()?);
                 // Maybe set a `lower` to VerReq::Ge(currently_installed_version); `upper` to VerReq::NoBound
-                let version = VerReq::NoBound;
                 Some(DepVer {
                     name: latest.to_string(),
                     range: Range {
-                        lower: version.clone(),
-                        upper: version,
+                        lower: VerReq::NoBound,
+                        upper: VerReq::NoBound,
                     },
                 })
             }
             Self::Specific(specific) => Some(specific.clone()),
             Self::Volatile(volatile) => {
-                let mut command = Command::new("/usr/bin/which");
-                command.arg(volatile);
-                command.stdout(std::process::Stdio::null());
-                command.stderr(std::process::Stdio::null());
-                if let Ok(Some(status)) = command.status().map(|x| x.code())
-                    && status == 0
-                {
+                let result = command("/usr/bin/which", &[volatile], None);
+                if result.is_some_and(|x| x == 0) {
                     None
                 } else {
                     Some(DepVer {
@@ -87,13 +81,8 @@ impl DependKind {
                     }
                 }
                 Self::Volatile(volatile) => {
-                    let mut command = Command::new("/usr/bin/which");
-                    command.arg(volatile);
-                    command.stdout(std::process::Stdio::null());
-                    command.stderr(std::process::Stdio::null());
-                    if let Ok(Some(status)) = command.status().map(|x| x.code())
-                        && status == 0
-                    {
+                    let result = command("/usr/bin/which", &[volatile], None);
+                    if result.is_some_and(|x| x == 0) {
                         None
                     } else if let Some(data) =
                         ProcessedMetaData::get_metadata(volatile, None, sources, true).await

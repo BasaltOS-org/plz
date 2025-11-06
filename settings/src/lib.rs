@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use utils::{PostAction, err, get_dir, is_root};
 
-#[derive(PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct SettingsYaml {
     pub locked: bool,
     pub version: String,
@@ -91,20 +91,22 @@ impl SettingsYaml {
     }
 }
 
-#[derive(PartialEq, Eq, Deserialize, Serialize, Debug, Hash, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum OriginKind {
+    Apt(String),
     Pax(String),
     Github { user: String, repo: String },
 }
 
-#[derive(PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Arch {
-    NoArch,
+    Any,
     X86_64v1,
     X86_64v3,
     Aarch64,
     Armv7l,
     Armv8l,
+    NoArch,
 }
 
 impl Default for SettingsYaml {

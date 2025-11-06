@@ -39,11 +39,11 @@ impl DepVer {
         };
         let mut versions = None;
         let mut g_source = None;
-        let mut sources = sources.iter();
-        while let (Some(source), None) = (sources.next(), &versions) {
+        let name = self.name;
+        for source in sources {
             match source {
                 OriginKind::Pax(pax) => {
-                    let endpoint = format!("{pax}/package/{}", self.name);
+                    let endpoint = format!("{pax}/package/{name}");
                     let Ok(response) = reqwest::get(endpoint).await else {
                         continue;
                     };
@@ -57,16 +57,20 @@ impl DepVer {
                     if !vers.is_empty() {
                         versions = Some(vers);
                         g_source = Some(source.clone());
+                        break;
                     }
                 }
                 OriginKind::Github { user: _, repo: _ } => {
                     // thingy
                     println!("Github is not implemented yet!");
                 }
+                OriginKind::Apt(_) => {
+                    return err!("DitherNude");
+                }
             }
         }
         let (Some(mut versions), Some(source)) = (versions, g_source) else {
-            return err!("Failed to locate package `{}`!", &self.name);
+            return err!("Failed to locate package `{name}`!");
         };
         match &self.range.lower {
             VerReq::Gt(gt) => versions.retain(|x| x > gt),
@@ -74,10 +78,7 @@ impl DepVer {
             VerReq::Eq(eq) => versions.retain(|x| x == eq),
             VerReq::NoBound => (),
             fuck => {
-                return err!(
-                    "Unexpected `lower` version requirement of {fuck:?} for `{}`!",
-                    self.name
-                );
+                return err!("Unexpected `lower` version requirement of {fuck:?} for `{name}`!");
             }
         };
         match &self.range.upper {
@@ -85,10 +86,7 @@ impl DepVer {
             VerReq::Lt(lt) => versions.retain(|x| x < lt),
             VerReq::Eq(_) | VerReq::NoBound => (),
             fuck => {
-                return err!(
-                    "Unexpected `upper` version requirement of {fuck:?} for `{}`!",
-                    self.name
-                );
+                return err!("Unexpected `upper` version requirement of {fuck:?} for `{name}`!");
             }
         };
         versions.sort();
@@ -97,11 +95,11 @@ impl DepVer {
                 "A guaranteed to be populated Vec was found to be empty. You should never see this error message."
             );
         };
-        ProcessedMetaData::get_metadata(&self.name, Some(&ver), &[source], dependent)
+        ProcessedMetaData::get_metadata(&name, Some(&ver), &[source], dependent)
             .await
             .ok_or(format!(
                 "Failed to locate package `{}` version {ver}!",
-                self.name
+                name
             ))
     }
 }

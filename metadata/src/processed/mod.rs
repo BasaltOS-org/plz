@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use settings::OriginKind;
+use settings::{Arch, OriginKind};
 use std::hash::Hash;
 use std::{
     collections::HashSet,
@@ -11,6 +11,7 @@ use std::{
 use tokio::runtime::Runtime;
 use utils::{Version, err, get_update_dir, tmpfile};
 
+use crate::parsers::apt::RawApt;
 use crate::{
     DepVer, DependKind, InstallPackage, InstalledInstallKind, InstalledMetaData, MetaDataKind,
     Specific, get_metadata_path, installed::InstalledCompilable, pax::RawPax,
@@ -21,7 +22,7 @@ pub enum ProcessedInstallKind {
     PreBuilt(PreBuilt),
     Compilable(ProcessedCompilable),
 }
-#[derive(PartialEq, Eq, Debug, Deserialize, Serialize, Hash, Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct PreBuilt {
     pub critical: Vec<String>,
     pub configs: Vec<String>,
@@ -98,11 +99,14 @@ impl ProcessedMetaData {
             Some(file) => file,
             None => return err!("Failed to reserve a file for {name}!"),
         };
-        if let Ok(mut file) = File::create(&tmpfile) {
+        if let Ok(mut file) = File::create(&tmpfile.0) {
             let endpoint = match self.origin {
                 OriginKind::Pax(pax) => format!("{pax}?v={}", self.version),
                 OriginKind::Github { user: _, repo: _ } => {
                     return err!("Github is not implemented yet!"); // thingy
+                }
+                OriginKind::Apt(_) => {
+                    return err!("DitherNude");
                 }
             };
             if let Ok(response) = reqwest::get(endpoint).await {
@@ -117,21 +121,19 @@ impl ProcessedMetaData {
                 return err!("Failed to ");
             }
         } else {
-            return err!("Failed to open temporary file {}!", tmpfile.display());
+            return err!("Failed to open temporary file {}!", tmpfile.1);
         }
         match self.install_kind {
             ProcessedInstallKind::PreBuilt(_) => {
                 return err!("PreBuilt is not implemented yet!"); //thingy
             }
             ProcessedInstallKind::Compilable(compilable) => {
-                let build = compilable.build.replace("{$~}", &tmpfile.to_string_lossy());
+                let build = compilable.build.replace("{$~}", &tmpfile.1);
                 let mut command = RunCommand::new("/usr/bin/bash");
                 if command.arg("-c").arg(build).status().is_err() {
                     return err!("Failed to build package `{}`!", self.name);
                 }
-                let install = compilable
-                    .install
-                    .replace("{$~}", &tmpfile.to_string_lossy());
+                let install = compilable.install.replace("{$~}", &tmpfile.1);
                 let mut command = RunCommand::new("/usr/bin/bash");
                 if command.arg("-c").arg(install).status().is_err() {
                     return err!("Failed to install package `{}`!", self.name);
@@ -185,35 +187,56 @@ impl ProcessedMetaData {
         })
     }
     pub async fn get_metadata(
-        app: &str,
+        name: &str,
         version: Option<&str>,
         sources: &[OriginKind],
         dependent: bool,
     ) -> Option<Self> {
         let mut metadata = None;
-        let mut sources = sources.iter();
-        while let (Some(source), None) = (sources.next(), &metadata) {
+        for source in sources {
             match source {
                 OriginKind::Pax(source) => {
-                    metadata = {
-                        let endpoint = if let Some(version) = version {
-                            format!("{source}/packages/metadata/{app}?v={version}")
-                        } else {
-                            format!("{source}/packages/metadata/{app}")
-                        };
-                        let body = reqwest::get(endpoint).await.ok()?.text().await.ok()?;
-                        if let Ok(raw_pax) = serde_json::from_str::<RawPax>(&body)
-                            && let Some(processed) = raw_pax.process()
-                        {
-                            Some(processed)
-                        } else {
-                            None
-                        }
+                    // metadata = {
+                    let endpoint = if let Some(version) = version {
+                        format!("{source}/packages/metadata/{name}?v={version}")
+                    } else {
+                        format!("{source}/packages/metadata/{name}")
                     };
+                    let body = reqwest::get(endpoint).await.ok()?.text().await.ok()?;
+                    if let Ok(raw_pax) = serde_json::from_str::<RawPax>(&body) {
+                        metadata = raw_pax.to_process();
+                        break;
+                    }
+                    //     && let Some(processed) = raw_pax.process()
+                    // {
+                    //     Some(processed)
+                    // } else {
+                    //     None
+                    // }
+                    // };
                 }
                 OriginKind::Github { user: _, repo: _ } => {
                     // thingy
                     println!("Github is not implemented yet!");
+                }
+                OriginKind::Apt(apt) => {
+                    let vers = RawApt::get_vers(apt, name).await;
+                    let ver = (if let Some(version) = version {
+                        vers.into_iter().find(|x| x.1.to_string() == version)
+                    } else {
+                        let mut vers = vers.into_iter().collect::<Vec<(String, Version, Arch)>>();
+                        vers.sort_by(|a, b| a.1.cmp(&b.1));
+                        vers.into_iter().next_back()
+                    })?;
+                    let raw_apt = match RawApt::to_raw_apt(apt, name, &ver.0).await {
+                        Ok(data) => dbg!(data),
+                        Err(fault) => {
+                            println!("{fault}");
+                            return None;
+                        }
+                    };
+                    metadata = raw_apt.to_processed();
+                    break;
                 }
             }
             if let Some(mut mut_metadata) = metadata {

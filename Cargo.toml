@@ -4,6 +4,8 @@ members = ["commands", "flags", "metadata", "settings", "statebox", "utils"]
 
 [workspace.dependencies]
 commands = { path = "./commands" }
+debian-control = "0.2.0"
+fancy-regex = "0.16.2"
 flags = { path = "./flags" }
 metadata = { path = "./metadata" }
 nix = { version = "0.30.1", features = ["user"] }
@@ -23,6 +25,7 @@ edition = "2024"
 
 [dependencies]
 commands.workspace = true
+debian-control.workspace = true
 flags.workspace = true
 metadata.workspace = true
 reqwest.workspace = true

@@ -48,10 +48,19 @@ pub fn is_root() -> bool {
     unistd::geteuid().as_raw() == 0
 }
 
-pub fn tmpfile() -> Option<PathBuf> {
-    Some(PathBuf::from(
-        String::from_utf8_lossy(&Command::new("mktemp").output().ok()?.stdout).trim(),
-    ))
+pub fn tmpfile() -> Option<(PathBuf, String)> {
+    let path = String::from_utf8_lossy(&Command::new("mktemp").output().ok()?.stdout)
+        .trim()
+        .to_string();
+    Some((PathBuf::from(&path), path))
+}
+
+pub fn tmpdir() -> Option<(PathBuf, String)> {
+    let mut command = Command::new("mktemp");
+    let path = String::from_utf8_lossy(&command.arg("-d").output().ok()?.stdout)
+        .trim()
+        .to_string();
+    Some((PathBuf::from(&path), path))
 }
 
 pub fn yes_flag() -> Flag {
@@ -110,17 +119,32 @@ pub fn choice(message: &str, default_yes: bool) -> Result<bool, String> {
     }
 }
 
+pub fn command(name: &str, args: &[&str], pwd: Option<&str>) -> Option<i32> {
+    let mut command = Command::new(name);
+    command.args(args);
+    command.stdout(std::process::Stdio::null());
+    command.stderr(std::process::Stdio::null());
+    if let Some(pwd) = pwd {
+        command.current_dir(pwd);
+    }
+    command.status().map(|x| x.code()).ok().flatten()
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Version {
     pub major: usize,
     pub minor: usize,
     pub patch: usize,
     pub pre: String,
+    pub build: Option<String>,
 }
 
 impl Version {
     pub fn parse(src: &str) -> Result<Self, String> {
-        let src = src.split_once('+').map(|x| x.0).unwrap_or(src);
+        let (src, build) = src
+            .split_once('+')
+            .map(|x| (x.0, Some(x.1.to_string())))
+            .unwrap_or((src, None));
         let (src, pre) = src
             .split_once('-')
             .map(|x| (x.0, x.1.to_string()))
@@ -140,6 +164,7 @@ impl Version {
                                         minor,
                                         patch,
                                         pre,
+                                        build,
                                     })
                                 }
                             } else {
@@ -151,6 +176,7 @@ impl Version {
                                 minor,
                                 patch: 0,
                                 pre,
+                                build,
                             })
                         }
                     } else {
@@ -162,6 +188,7 @@ impl Version {
                         minor: 0,
                         patch: 0,
                         pre,
+                        build,
                     })
                 }
             } else {
@@ -175,14 +202,18 @@ impl Version {
 
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.pre.is_empty() {
-            f.write_str(&format!("{}.{}.{}", self.major, self.minor, self.patch))
+        let mut tail = if self.pre.is_empty() {
+            String::new()
         } else {
-            f.write_str(&format!(
-                "{}.{}.{}-{}",
-                self.major, self.minor, self.patch, self.pre
-            ))
+            format!("-{}", self.pre)
+        };
+        if let Some(build) = &self.build {
+            tail.push_str(&format!("+{}", build));
         }
+        f.write_str(&format!(
+            "{}.{}.{}{}",
+            self.major, self.minor, self.patch, tail
+        ))
     }
 }
 
@@ -191,7 +222,10 @@ impl Ord for Version {
         match self.major.cmp(&other.major) {
             Ordering::Equal => match self.minor.cmp(&other.minor) {
                 Ordering::Equal => match self.patch.cmp(&other.patch) {
-                    Ordering::Equal => self.pre.cmp(&other.pre),
+                    Ordering::Equal => match self.pre.cmp(&other.pre) {
+                        Ordering::Equal => self.build.cmp(&other.build),
+                        order => order,
+                    },
                     order => order,
                 },
                 order => order,

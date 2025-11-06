@@ -24,7 +24,7 @@ pub struct RawPax {
 }
 
 impl RawPax {
-    pub fn process(self) -> Option<ProcessedMetaData> {
+    pub fn to_process(self) -> Option<ProcessedMetaData> {
         let origin = if self.origin.starts_with("gh/") {
             let split = self
                 .origin
