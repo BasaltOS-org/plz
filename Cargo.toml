@@ -5,8 +5,8 @@ members = ["commands", "flags", "metadata", "settings", "statebox", "utils"]
 [workspace.dependencies]
 commands = { path = "./commands" }
 debian-control = "0.2.0"
-fancy-regex = "0.16.2"
 flags = { path = "./flags" }
+lazy-regex = { version = "3.4.2" }
 metadata = { path = "./metadata" }
 nix = { version = "0.30.1", features = ["user"] }
 reqwest = "0.12.24"
@@ -14,6 +14,7 @@ settings = { path = "./settings" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 serde_norway = "0.9.42"
+snafu = "0.8.9"
 statebox = { path = "./statebox" }
 tokio = { version = "1.48.0", features = ["rt-multi-thread"] }
 utils = { path = "./utils" }
@@ -25,7 +26,6 @@ edition = "2024"
 
 [dependencies]
 commands.workspace = true
-debian-control.workspace = true
 flags.workspace = true
 metadata.workspace = true
 reqwest.workspace = true
@@ -33,6 +33,7 @@ settings.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
+snafu.workspace = true
 statebox.workspace = true
 tokio.workspace = true
 utils.workspace = true

@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 serde.workspace = true
 serde_norway.workspace = true
+snafu.workspace = true
 utils.workspace = true

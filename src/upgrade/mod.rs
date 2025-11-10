@@ -59,7 +59,11 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
     if states.get("yes").is_none_or(|x: &bool| !*x) {
         match choice("Continue?", true) {
             Err(message) => return PostAction::Fuck(message),
-            Ok(false) => return PostAction::Fuck(String::from("Aborted.")),
+            Ok(false) => {
+                return PostAction::Fuck(snafu::FromString::without_source(String::from(
+                    "Aborted",
+                )));
+            }
             Ok(true) => (),
         };
     }

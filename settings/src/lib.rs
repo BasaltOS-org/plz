@@ -7,7 +7,8 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use utils::{PostAction, err, get_dir, is_root};
+use snafu::{ResultExt, Whatever, whatever};
+use utils::{PostAction, get_dir, is_root};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct SettingsYaml {
@@ -60,34 +61,27 @@ impl SettingsYaml {
             sources: Vec::new(),
         }
     }
-    pub fn set_settings(self) -> Result<(), String> {
-        let mut file = match File::create(affirm_path()?) {
-            Ok(file) => file,
-            Err(_) => return err!("Failed to open SettingsYaml as WO!"),
-        };
-        let settings = match serde_norway::to_string(&self) {
-            Ok(settings) => settings,
-            Err(_) => return err!("Failed to parse SettingsYaml to string!"),
-        };
-        match file.write_all(settings.as_bytes()) {
-            Ok(_) => Ok(()),
-            Err(_) => err!("Failed to write to file!"),
-        }
+    pub fn set_settings(self) -> Result<(), Whatever> {
+        let mut file =
+            File::create(affirm_path()?).whatever_context("Failed to open SettingsYaml as WO!")?;
+        let settings = serde_norway::to_string(&self)
+            .whatever_context("Failed to parse SettingsYaml to string!")?;
+        file.write_all(settings.as_bytes())
+            .whatever_context("Failed to write to file!")
     }
-    pub fn get_settings() -> Result<Self, String> {
-        let mut file = match File::open(affirm_path()?) {
-            Ok(file) => file,
-            Err(_) => return err!("Failed to open SettingsYaml as RO!"),
-        };
+    pub fn get_settings() -> Result<Self, Whatever> {
+        let mut file =
+            File::open(affirm_path()?).whatever_context("Failed to open SettingsYaml as RO!")?;
         let mut sources = String::new();
-        if file.read_to_string(&mut sources).is_err() {
-            return err!("Failed to read file!");
-        };
-        let sources = match serde_norway::from_str(&sources) {
-            Ok(settings_yaml) => settings_yaml,
-            Err(_) => return err!("Failed to parse data into SettingsYaml!"),
-        };
-        Ok(sources)
+        file.read_to_string(&mut sources)
+            .whatever_context("Failed to read file!")?;
+        serde_norway::from_str(&sources).whatever_context("Failed to parse data into SettingsYaml!")
+    }
+}
+
+impl Default for SettingsYaml {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -109,42 +103,41 @@ pub enum Arch {
     NoArch,
 }
 
-impl Default for SettingsYaml {
-    fn default() -> Self {
-        Self::new()
+impl Arch {
+    pub fn is_compatible(&self, name: &str) -> Result<bool, Whatever> {
+        let installed = SettingsYaml::get_settings()?.arch;
+        match self {
+            Self::Any => Ok(true),
+            Self::X86_64v1 => Ok([Self::X86_64v1, Self::X86_64v3].contains(&installed)),
+            Self::NoArch => {
+                whatever!("The requested package `{name}` is of an unrecognized architecture!")
+            }
+            other => Ok(installed == *other),
+        }
     }
 }
 
-fn affirm_path() -> Result<PathBuf, String> {
+fn affirm_path() -> Result<PathBuf, Whatever> {
     let mut path = get_dir()?;
     path.push("settings.yaml");
     if !path.exists() {
-        match File::create(&path) {
-            Ok(mut file) => {
-                if let Ok(new_settings) = serde_norway::to_string(&SettingsYaml::new()) {
-                    if file.write_all(new_settings.as_bytes()).is_ok() {
-                        Ok(path)
-                    } else {
-                        err!("Failed to write to file!")
-                    }
-                } else {
-                    err!("Failed to serialize settings!")
-                }
-            }
-            Err(_) => err!("Failed to create settings file!"),
-        }
-    } else if path.is_file() {
-        if File::open(&path).is_ok() {
+        let mut file = File::create(&path).whatever_context("Failed to create settings file!")?;
+        if let Ok(new_settings) = serde_norway::to_string(&SettingsYaml::new()) {
+            file.write_all(new_settings.as_bytes())
+                .whatever_context("Failed to write to file!")?;
             Ok(path)
         } else {
-            err!("Failed to read settings file!")
+            whatever!("Failed to serialize settings!")
         }
+    } else if path.is_file() {
+        File::open(&path).whatever_context("Failed to read settings file!")?;
+        Ok(path)
     } else {
-        err!("Settings file is of unexpected type!")
+        whatever!("Settings file is of unexpected type!")
     }
 }
 
-pub fn acquire_lock() -> Result<Option<PostAction>, String> {
+pub fn acquire_lock() -> Result<Option<PostAction>, Whatever> {
     if !is_root() {
         return Ok(Some(PostAction::Elevate));
     }
@@ -205,7 +198,7 @@ pub fn acquire_lock() -> Result<Option<PostAction>, String> {
     Ok(None)
 }
 
-pub fn remove_lock() -> Result<(), String> {
+pub fn remove_lock() -> Result<(), Whatever> {
     let mut settings = SettingsYaml::get_settings()?;
     settings.locked = false;
     settings.set_settings()

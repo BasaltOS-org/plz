@@ -58,7 +58,9 @@ fn run(states: &StateBox, args: Option<&[String]>, purge: bool) -> PostAction {
         args.for_each(|x| data.push((x, None)));
     }
     let Ok(runtime) = Runtime::new() else {
-        return PostAction::Fuck(String::from("Error creating runtime!"));
+        return PostAction::Fuck(snafu::FromString::without_source(String::from(
+            "Error creating runtime!",
+        )));
     };
     match runtime.block_on(get_local_deps(&data)) {
         Ok(metadatas) => {
@@ -87,7 +89,11 @@ fn run(states: &StateBox, args: Option<&[String]>, purge: bool) -> PostAction {
                 if states.get("yes").is_none_or(|x: &bool| !*x) {
                     match choice("Continue?", true) {
                         Err(message) => return PostAction::Fuck(message),
-                        Ok(false) => return PostAction::Fuck(String::from("Aborted.")),
+                        Ok(false) => {
+                            return PostAction::Fuck(snafu::FromString::without_source(
+                                String::from("Aborted."),
+                            ));
+                        }
                         Ok(true) => (),
                     };
                 }

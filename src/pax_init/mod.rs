@@ -3,10 +3,11 @@ use flags::Flag;
 use settings::OriginKind;
 use settings::SettingsYaml;
 use settings::acquire_lock;
+use snafu::ResultExt;
+use snafu::Whatever;
 use statebox::StateBox;
 use tokio::runtime::Runtime;
 use utils::PostAction;
-use utils::err;
 
 static LONG_NAME: &str = "force";
 
@@ -48,7 +49,9 @@ To continue anyway, run with flag `\x1B[35m--{LONG_NAME}\x1B[0m`."
     } else {
         println!("Pulling sources...");
         let Ok(runtime) = Runtime::new() else {
-            return PostAction::Fuck(String::from("Error creating runtime!"));
+            return PostAction::Fuck(snafu::FromString::without_source(String::from(
+                "Error creating runtime!",
+            )));
         };
         if let Err(fault) = runtime.block_on(gen_sources()) {
             return PostAction::Fuck(fault);
@@ -59,17 +62,16 @@ To continue anyway, run with flag `\x1B[35m--{LONG_NAME}\x1B[0m`."
     PostAction::Return
 }
 
-async fn gen_sources() -> Result<(), String> {
-    let Some(sources) = reqwest::get(
+async fn gen_sources() -> Result<(), Whatever> {
+    let sources = reqwest::get(
         "https://raw.githubusercontent.com/oreonproject/pax-rs/refs/heads/main/endpoints.txt",
     )
     .await
-    .ok() else {
-        return err!("Failed to locate sources!");
-    };
-    let Some(sources) = sources.text().await.ok() else {
-        return err!("Failed to read pulled sources!");
-    };
+    .whatever_context("Failed to locate sources!")?;
+    let sources = sources
+        .text()
+        .await
+        .whatever_context("Failed to read pulled sources!")?;
     let mut settings = SettingsYaml::get_settings()?;
     for source in sources.trim().split('\n') {
         // make this actually detect the source type

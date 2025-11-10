@@ -24,7 +24,9 @@ fn run(_states: &StateBox, _args: Option<&[String]>) -> PostAction {
         _ => (),
     }
     let Ok(runtime) = Runtime::new() else {
-        return PostAction::Fuck(String::from("Error creating runtime!"));
+        return PostAction::Fuck(snafu::FromString::without_source(String::from(
+            "Error creating runtime!",
+        )));
     };
     if let Err(fault) = runtime.block_on(collect_updates()) {
         PostAction::Fuck(fault)

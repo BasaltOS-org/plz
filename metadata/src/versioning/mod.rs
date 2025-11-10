@@ -6,7 +6,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use settings::{OriginKind, SettingsYaml};
-use utils::{Range, VerReq, Version, err};
+use snafu::{OptionExt, ResultExt, Whatever, whatever};
+use utils::{Range, VerReq, Version};
 
 use crate::{
     QueuedChanges, get_metadata_path,
@@ -21,7 +22,7 @@ pub struct DepVer {
 }
 
 impl DepVer {
-    pub fn get_installed_specific(&self) -> Result<Specific, String> {
+    pub fn get_installed_specific(&self) -> Result<Specific, Whatever> {
         let metadata = InstalledMetaData::open(&self.name)?;
         Ok(Specific {
             name: metadata.name,
@@ -32,7 +33,7 @@ impl DepVer {
         self,
         sources: Option<&[OriginKind]>,
         dependent: bool,
-    ) -> Result<ProcessedMetaData, String> {
+    ) -> Result<ProcessedMetaData, Whatever> {
         let sources = match sources {
             Some(sources) => sources,
             None => &SettingsYaml::get_settings()?.sources,
@@ -65,12 +66,12 @@ impl DepVer {
                     println!("Github is not implemented yet!");
                 }
                 OriginKind::Apt(_) => {
-                    return err!("DitherNude");
+                    whatever!("DitherNude")
                 }
             }
         }
         let (Some(mut versions), Some(source)) = (versions, g_source) else {
-            return err!("Failed to locate package `{name}`!");
+            whatever!("Failed to locate package `{name}`!")
         };
         match &self.range.lower {
             VerReq::Gt(gt) => versions.retain(|x| x > gt),
@@ -78,7 +79,7 @@ impl DepVer {
             VerReq::Eq(eq) => versions.retain(|x| x == eq),
             VerReq::NoBound => (),
             fuck => {
-                return err!("Unexpected `lower` version requirement of {fuck:?} for `{name}`!");
+                whatever!("Unexpected `lower` version requirement of {fuck:?} for `{name}`!")
             }
         };
         match &self.range.upper {
@@ -86,21 +87,14 @@ impl DepVer {
             VerReq::Lt(lt) => versions.retain(|x| x < lt),
             VerReq::Eq(_) | VerReq::NoBound => (),
             fuck => {
-                return err!("Unexpected `upper` version requirement of {fuck:?} for `{name}`!");
+                whatever!("Unexpected `upper` version requirement of {fuck:?} for `{name}`!");
             }
         };
         versions.sort();
-        let Some(ver) = versions.last().map(|x| x.to_string()) else {
-            return err!(
-                "A guaranteed to be populated Vec was found to be empty. You should never see this error message."
-            );
-        };
+        let ver = versions.last().map(|x| x.to_string()).whatever_context("A guaranteed to be populated Vec was found to be empty. You should never see this error message.")?;
         ProcessedMetaData::get_metadata(&name, Some(&ver), &[source], dependent)
             .await
-            .ok_or(format!(
-                "Failed to locate package `{}` version {ver}!",
-                name
-            ))
+            .with_whatever_context(|| format!("Failed to locate package `{}` version {ver}!", name))
     }
 }
 
@@ -111,7 +105,7 @@ pub struct Specific {
 }
 
 impl Specific {
-    pub fn write_dependent(&self, their_name: &str, their_ver: &str) -> Result<(), String> {
+    pub fn write_dependent(&self, their_name: &str, their_ver: &str) -> Result<(), Whatever> {
         let (path, data) = get_metadata_path(&self.name)?;
         if path.exists()
             && path.is_file()
@@ -135,36 +129,29 @@ impl Specific {
                     data.dependents.push(their_dep);
                 }
             }
-            let mut file = match File::create(&path) {
-                Ok(file) => file,
-                Err(_) => {
-                    return err!(
-                        "Failed to open dependency `{}`'s metadata as WO!",
-                        self.name
-                    );
-                }
-            };
-            let data = match serde_norway::to_string(&data) {
-                Ok(data) => data,
-                Err(_) => {
-                    return err!(
-                        "Failed to parse dependency `{}`'s metadata to string!",
-                        self.name
-                    );
-                }
-            };
-            match file.write_all(data.as_bytes()) {
-                Ok(_) => Ok(()),
-                Err(_) => err!(
+            let mut file = File::create(&path).with_whatever_context(|_| {
+                format!(
+                    "Failed to open dependency `{}`'s metadata as WO!",
+                    self.name
+                )
+            })?;
+            let data = serde_norway::to_string(&data).with_whatever_context(|_| {
+                format!(
+                    "Failed to parse dependency `{}`'s metadata to string!",
+                    self.name
+                )
+            })?;
+            file.write_all(data.as_bytes()).with_whatever_context(|_| {
+                format!(
                     "Failed to write to dependency `{}`'s metadata file!",
                     self.name
-                ),
-            }
+                )
+            })
         } else {
-            err!("Cannot find data for dependency `{}`!", self.name)
+            whatever!("Cannot find data for dependency `{}`!", self.name)
         }
     }
-    pub fn get_dependents(&self, queued: &mut QueuedChanges) -> Result<(), String> {
+    pub fn get_dependents(&self, queued: &mut QueuedChanges) -> Result<(), Whatever> {
         let data = InstalledMetaData::open(&self.name)?;
         if data.version == self.version.to_string() {
             for dependent in &data.dependents {
@@ -174,14 +161,14 @@ impl Specific {
             }
             Ok(())
         } else {
-            err!(
+            whatever!(
                 "`{}` didn't contain version {}!",
                 self.name,
                 self.version.to_string()
             )
         }
     }
-    pub fn remove(&self, purge: bool) -> Result<(), String> {
+    pub fn remove(&self, purge: bool) -> Result<(), Whatever> {
         let msg = if purge { "Purging" } else { "Removing" };
         println!("{} {} version {}...", msg, self.name, self.version);
         let (path, data) = get_metadata_path(&self.name)?;
@@ -190,7 +177,7 @@ impl Specific {
             // has already removed this one, and therefore we are just holding
             // a stale package `Specific`!
             println!(
-                "\x1B[33m[WARN] Skipping `{}`\x1B[0m (This is likely the result of queueing a package for removal twice)...",
+                "\x1B[33m[WARN] Skipping `{}`\x1B[0m (This is likely the result of cyclical dependencies)...",
                 self.name
             );
             return Ok(());
@@ -206,7 +193,7 @@ impl Specific {
         }
         match data.install_kind {
             InstalledInstallKind::PreBuilt(_) => {
-                return err!("PreBuilt is not implemented yet!"); //thingy
+                whatever!("PreBuilt is not implemented yet!") //thingy
             }
             InstalledInstallKind::Compilable(compilable) => {
                 // I'm not sure if the `purge` script is run IN PLACE OF, or
@@ -217,14 +204,16 @@ impl Specific {
                     (compilable.uninstall, "remove")
                 };
                 let mut command = Command::new("/usr/bin/bash");
-                if command.arg("-c").arg(script).status().is_err() {
-                    return err!("Failed to {msg} package `{}`!", self.name);
-                }
+                command
+                    .arg("-c")
+                    .arg(script)
+                    .status()
+                    .with_whatever_context(|_| {
+                        format!("Failed to {msg} package `{}`!", self.name)
+                    })?;
             }
         }
-        match fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(_) => err!("Failed to remove `{}`!", &self.name),
-        }
+        fs::remove_file(path)
+            .with_whatever_context(|_| format!("Failed to remove `{}`!", &self.name))
     }
 }

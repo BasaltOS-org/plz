@@ -2,9 +2,10 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 use settings::OriginKind;
-use utils::{Range, VerReq, Version, command, err};
+use snafu::{OptionExt, Whatever};
+use utils::{Range, VerReq, Version, command};
 
-use crate::{DepVer, InstallPackage, Specific, processed::ProcessedMetaData};
+use crate::{DepVer, InstallPackage, Specific, get_metadata_path, processed::ProcessedMetaData};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum DependKind {
@@ -48,67 +49,129 @@ impl DependKind {
         deps: &[Self],
         sources: &[OriginKind],
         prior: &mut HashSet<Specific>,
-    ) -> Result<Vec<InstallPackage>, String> {
+    ) -> Result<Vec<InstallPackage>, Whatever> {
         let mut result = Vec::new();
         for dep in deps {
             let dep = match dep {
                 Self::Latest(latest) => {
-                    if let Some(data) =
-                        ProcessedMetaData::get_metadata(latest, None, sources, true).await
-                    {
-                        Some(data)
-                    } else {
-                        return err!("Failed to locate latest version of dependency `{latest}`");
-                    }
+                    ProcessedMetaData::get_metadata(latest, None, sources, true)
+                        .await
+                        .with_whatever_context(|| {
+                            format!("Failed to locate latest version of dependency `{latest}`")
+                        })?
                 }
                 Self::Specific(dep_ver) => {
                     let specific = dep_ver.clone().pull_metadata(Some(sources), true).await?;
-                    if let Some(data) = ProcessedMetaData::get_metadata(
+                    ProcessedMetaData::get_metadata(
                         &specific.name,
                         Some(&specific.version.to_string()),
                         sources,
                         true,
                     )
                     .await
-                    {
-                        Some(data)
-                    } else {
-                        return err!(
+                    .with_whatever_context(|| {
+                        format!(
                             "Failed to locate dependency `{}` version {}!",
-                            specific.name,
-                            specific.version
-                        );
-                    }
+                            specific.name, specific.version
+                        )
+                    })?
                 }
                 Self::Volatile(volatile) => {
                     let result = command("/usr/bin/which", &[volatile], None);
                     if result.is_some_and(|x| x == 0) {
-                        None
-                    } else if let Some(data) =
-                        ProcessedMetaData::get_metadata(volatile, None, sources, true).await
-                    {
-                        Some(data)
+                        continue;
                     } else {
-                        return err!(
-                            "Failed to locate latest version of volatile dependency `{volatile}`"
-                        );
+                        ProcessedMetaData::get_metadata(volatile, None, sources, true).await.with_whatever_context(|| format!("Failed to locate latest version of volatile dependency `{volatile}`"))?
                     }
                 }
             };
-            if let Some(dep) = dep {
-                let specific = Specific {
-                    name: dep.name.to_string(),
-                    version: Version::parse(&dep.version)?,
-                };
-                if !prior.contains(&specific) {
-                    prior.insert(specific);
-                    let child =
-                        Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior)).await?;
-                    result.push(child);
-                }
+            let specific = Specific {
+                name: dep.name.to_string(),
+                version: Version::parse(&dep.version)?,
+            };
+            if !prior.contains(&specific) {
+                prior.insert(specific);
+                let child = Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior)).await?;
+                result.push(child);
             }
         }
         Ok(result)
+    }
+    pub fn collapse<T: IntoIterator<Item = Self>>(deps: T) -> Option<Vec<Self>> {
+        let mut collapsed: Vec<Self> = Vec::new();
+        for dep in deps {
+            if let Some(index) = collapsed.iter().position(|x| x.name() == dep.name()) {
+                match &collapsed[index] {
+                    Self::Volatile(_) => collapsed[index] = dep,
+                    Self::Latest(_) => {
+                        if let Self::Specific(_) = dep {
+                            collapsed[index] = dep;
+                        }
+                    }
+                    Self::Specific(entry_specific) => {
+                        if let Self::Specific(dep_specific) = dep {
+                            let entry_range = entry_specific.range.clone();
+                            let dep_range = dep_specific.range;
+                            let range = dep_range.negotiate(Some(entry_range))?;
+                            collapsed[index] = Self::Specific(DepVer {
+                                name: dep_specific.name,
+                                range,
+                            })
+                        }
+                    }
+                }
+            } else {
+                collapsed.push(dep);
+            }
+        }
+        Some(collapsed)
+    }
+    pub fn choose<T: IntoIterator<Item = Self>>(choices: T) -> Option<Self> {
+        let mut first = None;
+        for choice in choices {
+            if choice.is_installed() {
+                return None;
+            } else if first.is_none() {
+                first = Some(choice);
+            }
+        }
+        first
+    }
+    fn is_installed(&self) -> bool {
+        match self {
+            Self::Latest(latest) => match get_metadata_path(latest) {
+                Ok(data) => data.1.is_some(),
+                Err(_) => false,
+            },
+            Self::Specific(specific) => match get_metadata_path(&specific.name) {
+                Ok(data) => {
+                    if let Some(data) = data.1 {
+                        let prior = Version::parse(&data.version).ok().map(|x| {
+                            let ver_req = VerReq::Eq(x);
+                            Range {
+                                upper: ver_req.clone(),
+                                lower: ver_req,
+                            }
+                        });
+                        specific.range.negotiate(prior).is_some()
+                    } else {
+                        false
+                    }
+                }
+                Err(_) => false,
+            },
+            Self::Volatile(volatile) => {
+                let result = command("/usr/bin/which", &[volatile], None);
+                if result.is_some_and(|x| x == 0) {
+                    true
+                } else {
+                    match get_metadata_path(volatile) {
+                        Ok(value) => value.1.is_some(),
+                        Err(_) => false,
+                    }
+                }
+            }
+        }
     }
     pub fn name(&self) -> String {
         match self {

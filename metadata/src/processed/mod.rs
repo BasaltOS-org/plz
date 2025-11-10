@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use settings::{Arch, OriginKind};
+use snafu::{OptionExt, ResultExt, Whatever, whatever};
 use std::hash::Hash;
 use std::{
     collections::HashSet,
@@ -9,7 +10,7 @@ use std::{
     process::Command as RunCommand,
 };
 use tokio::runtime::Runtime;
-use utils::{Version, err, get_update_dir, tmpfile};
+use utils::{Version, get_update_dir, tmpfile};
 
 use crate::parsers::apt::RawApt;
 use crate::{
@@ -81,7 +82,7 @@ impl ProcessedMetaData {
             hash: self.hash.to_string(),
         }
     }
-    pub async fn install_package(self) -> Result<(), String> {
+    pub async fn install_package(self) -> Result<(), Whatever> {
         let name = self.name.to_string();
         println!("Installing {name}...");
         let (path, _) = get_metadata_path(&name)?;
@@ -95,49 +96,51 @@ impl ProcessedMetaData {
                 version: Version::parse(&their_metadata.version)?,
             }
         }
-        let tmpfile = match tmpfile() {
-            Some(file) => file,
-            None => return err!("Failed to reserve a file for {name}!"),
-        };
-        if let Ok(mut file) = File::create(&tmpfile.0) {
-            let endpoint = match self.origin {
-                OriginKind::Pax(pax) => format!("{pax}?v={}", self.version),
-                OriginKind::Github { user: _, repo: _ } => {
-                    return err!("Github is not implemented yet!"); // thingy
-                }
-                OriginKind::Apt(_) => {
-                    return err!("DitherNude");
-                }
-            };
-            if let Ok(response) = reqwest::get(endpoint).await {
-                if let Ok(body) = response.text().await {
-                    let Ok(()) = file.write_all(body.as_bytes()) else {
-                        return err!("Failed to write downloaded PAX file to TMP file!");
-                    };
-                } else {
-                    return err!("Failed to download PAX file data!");
-                }
-            } else {
-                return err!("Failed to ");
+        let tmpfile =
+            tmpfile().with_whatever_context(|| format!("Failed to reserve a file for {name}!"))?;
+        let mut file = File::create(&tmpfile.0)
+            .with_whatever_context(|_| format!("Failed to open temporary file {}!", tmpfile.1))?;
+        let endpoint = match self.origin {
+            OriginKind::Pax(pax) => format!("{pax}?v={}", self.version),
+            OriginKind::Github { user: _, repo: _ } => {
+                whatever!("Github is not implemented yet!") // thingy
             }
-        } else {
-            return err!("Failed to open temporary file {}!", tmpfile.1);
-        }
+            OriginKind::Apt(_) => {
+                whatever!("DitherNude")
+            }
+        };
+        let response = reqwest::get(endpoint)
+            .await
+            .whatever_context("Failed to pull PAX file data!")?;
+        let body = response
+            .text()
+            .await
+            .whatever_context("Failed to download PAX file data!")?;
+        file.write_all(body.as_bytes())
+            .whatever_context("Failed to write downloaded PAX file to TMP file!")?;
         match self.install_kind {
             ProcessedInstallKind::PreBuilt(_) => {
-                return err!("PreBuilt is not implemented yet!"); //thingy
+                whatever!("PreBuilt is not implemented yet!") //thingy
             }
             ProcessedInstallKind::Compilable(compilable) => {
                 let build = compilable.build.replace("{$~}", &tmpfile.1);
                 let mut command = RunCommand::new("/usr/bin/bash");
-                if command.arg("-c").arg(build).status().is_err() {
-                    return err!("Failed to build package `{}`!", self.name);
-                }
+                command
+                    .arg("-c")
+                    .arg(build)
+                    .status()
+                    .with_whatever_context(|_| {
+                        format!("Failed to build package `{}`!", self.name)
+                    })?;
                 let install = compilable.install.replace("{$~}", &tmpfile.1);
                 let mut command = RunCommand::new("/usr/bin/bash");
-                if command.arg("-c").arg(install).status().is_err() {
-                    return err!("Failed to install package `{}`!", self.name);
-                }
+                command
+                    .arg("-c")
+                    .arg(install)
+                    .status()
+                    .with_whatever_context(|_| {
+                        format!("Failed to install package `{}`!", self.name)
+                    })?;
             }
         }
         metadata.write(&path)?;
@@ -147,7 +150,7 @@ impl ProcessedMetaData {
         }
         Ok(())
     }
-    pub fn write(self, base: &Path, inc: &mut usize) -> Result<Self, String> {
+    pub fn write(self, base: &Path, inc: &mut usize) -> Result<Self, Whatever> {
         let path = loop {
             let mut path = base.to_path_buf();
             path.push(format!("{inc}.yaml"));
@@ -157,34 +160,24 @@ impl ProcessedMetaData {
             }
             break path;
         };
-        let mut file = match File::create(&path) {
-            Ok(file) => file,
-            Err(_) => return err!("Failed to open upgrade metadata as WO!"),
-        };
-        let data = match serde_norway::to_string(&self) {
-            Ok(data) => data,
-            Err(_) => return err!("Failed to parse upgrade metadata to string!"),
-        };
-        match file.write_all(data.as_bytes()) {
-            Ok(_) => Ok(self),
-            Err(_) => err!("Failed to write upgrade metadata file!"),
-        }
+        let mut file =
+            File::create(&path).whatever_context("Failed to open upgrade metadata as WO!")?;
+        let data = serde_norway::to_string(&self)
+            .whatever_context("Failed to parse upgrade metadata to string!")?;
+        file.write_all(data.as_bytes())
+            .whatever_context("Failed to write upgrade metadata file!")?;
+        Ok(self)
     }
-    pub fn open(name: &str) -> Result<Self, String> {
+    pub fn open(name: &str) -> Result<Self, Whatever> {
         let mut path = get_update_dir()?;
         path.push(format!("{}.yaml", name));
-        let mut file = match File::open(&path) {
-            Ok(file) => file,
-            Err(_) => return err!("Failed to read package `{name}`'s metadata!"),
-        };
+        let mut file = File::open(&path)
+            .with_whatever_context(|_| format!("Failed to read package `{name}`'s metadata!"))?;
         let mut metadata = String::new();
-        if file.read_to_string(&mut metadata).is_err() {
-            return err!("Failed to read package `{name}`'s config!");
-        }
-        Ok(match serde_norway::from_str::<Self>(&metadata) {
-            Ok(data) => data,
-            Err(_) => return err!("Failed to parse package `{name}`'s data!"),
-        })
+        file.read_to_string(&mut metadata)
+            .with_whatever_context(|_| format!("Failed to read package `{name}`'s config!"))?;
+        serde_norway::from_str::<Self>(&metadata)
+            .with_whatever_context(|_| format!("Failed to parse package `{name}`'s data!"))
     }
     pub async fn get_metadata(
         name: &str,
@@ -204,7 +197,7 @@ impl ProcessedMetaData {
                     };
                     let body = reqwest::get(endpoint).await.ok()?.text().await.ok()?;
                     if let Ok(raw_pax) = serde_json::from_str::<RawPax>(&body) {
-                        metadata = raw_pax.to_process();
+                        metadata = raw_pax.to_process(dependent);
                         break;
                     }
                     //     && let Some(processed) = raw_pax.process()
@@ -220,47 +213,43 @@ impl ProcessedMetaData {
                     println!("Github is not implemented yet!");
                 }
                 OriginKind::Apt(apt) => {
-                    let vers = RawApt::get_vers(apt, name).await;
-                    let ver = (if let Some(version) = version {
+                    let vers = RawApt::get_vers(apt, None, name).await;
+                    let Some(ver) = (if let Some(version) = version {
                         vers.into_iter().find(|x| x.1.to_string() == version)
                     } else {
                         let mut vers = vers.into_iter().collect::<Vec<(String, Version, Arch)>>();
                         vers.sort_by(|a, b| a.1.cmp(&b.1));
                         vers.into_iter().next_back()
-                    })?;
-                    let raw_apt = match RawApt::to_raw_apt(apt, name, &ver.0).await {
+                    }) else {
+                        continue;
+                    };
+                    let processed = match RawApt::parse(apt, name, &ver.0, dependent).await {
                         Ok(data) => dbg!(data),
                         Err(fault) => {
                             println!("{fault}");
                             return None;
                         }
                     };
-                    metadata = raw_apt.to_processed();
+                    metadata = Some(processed);
                     break;
                 }
-            }
-            if let Some(mut mut_metadata) = metadata {
-                mut_metadata.dependent = dependent;
-                metadata = Some(mut_metadata);
-                break;
             }
         }
         metadata
     }
-    pub fn remove_update_cache(&self) -> Result<(), String> {
+    pub fn remove_update_cache(&self) -> Result<(), Whatever> {
         let path = get_update_dir()?;
-        let Ok(dir) = fs::read_dir(&path) else {
-            return err!("Failed to read {} as a directory!", path.display());
-        };
+        let dir = fs::read_dir(&path).with_whatever_context(|_| {
+            format!("Failed to read {} as a directory!", path.display())
+        })?;
         for file in dir.flatten() {
             if let Some(name) = file.path().file_prefix() {
                 let name = name.to_string_lossy();
                 let data = Self::open(&name)?;
                 if data.name == self.name {
-                    match fs::remove_file(file.path()) {
-                        Ok(()) => return Ok(()),
-                        Err(_) => return err!("Couldn't remove update cache for {}!", data.name),
-                    }
+                    return fs::remove_file(file.path()).with_whatever_context(|_| {
+                        format!("Couldn't remove update cache for {}!", data.name)
+                    });
                 }
             }
         }
@@ -274,7 +263,7 @@ impl ProcessedMetaData {
         metadata: &Self,
         sources: &[OriginKind],
         prior: &mut HashSet<Specific>,
-    ) -> Result<InstallPackage, String> {
+    ) -> Result<InstallPackage, Whatever> {
         let mut package = InstallPackage {
             metadata: metadata.clone(),
             build_deps: Vec::new(),
@@ -286,7 +275,11 @@ impl ProcessedMetaData {
             DependKind::batch_as_installed(&metadata.runtime_dependencies, sources, prior).await?;
         Ok(package)
     }
-    pub fn upgrade_package(&self, sources: &[OriginKind], runtime: &Runtime) -> Result<(), String> {
+    pub fn upgrade_package(
+        &self,
+        sources: &[OriginKind],
+        runtime: &Runtime,
+    ) -> Result<(), Whatever> {
         let version = Version::parse(&self.version)?;
         let specific = self.as_specific()?;
         let Ok(installed) = InstalledMetaData::open(&self.name) else {
@@ -330,7 +323,7 @@ impl ProcessedMetaData {
         let children = children
             .into_iter()
             .map(|x| runtime.block_on(x))
-            .collect::<Result<Vec<ProcessedMetaData>, String>>()?;
+            .collect::<Result<Vec<ProcessedMetaData>, Whatever>>()?;
         children
             .into_iter()
             .try_for_each(|x| match runtime.block_on(x.install_package()) {
@@ -352,9 +345,8 @@ impl ProcessedMetaData {
             if let Some(dep_ver) = package.as_dep_ver() {
                 let name = dep_ver.name.to_string();
                 let (path, metadata) = get_metadata_path(&name)?;
-                let Some(old_metadata) = metadata else {
-                    return err!("Cannot find data for package `{name}`!");
-                };
+                let old_metadata = metadata
+                    .with_whatever_context(|| format!("Cannot find data for package `{name}`!"))?;
                 let metadata = runtime
                     .block_on(dep_ver.pull_metadata(Some(sources), old_metadata.dependent))?;
                 if metadata.version != old_metadata.version {
@@ -372,10 +364,10 @@ impl ProcessedMetaData {
         runtime.block_on(self.clone().install_package())?;
         Ok(())
     }
-    pub fn as_specific(&self) -> Result<Specific, String> {
+    pub fn as_specific(&self) -> Result<Specific, Whatever> {
         Ok(Specific {
             name: self.name.to_string(),
-            version: Version::parse(&self.version)?,
+            version: dbg!(Version::parse(&self.version))?,
         })
     }
 }

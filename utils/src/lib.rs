@@ -3,42 +3,43 @@ use std::{cmp::Ordering, fs::DirBuilder, io::Write, path::PathBuf, process::Comm
 use flags::Flag;
 use nix::unistd;
 use serde::{Deserialize, Serialize};
+use snafu::{ResultExt, Whatever, whatever};
 
 // The action to perform once a command has run
 pub enum PostAction {
     Elevate,
     Err(i32),
-    Fuck(String),
+    Fuck(Whatever),
     GetHelp,
     NothingToDo,
     PullSources,
     Return,
 }
 
-pub fn get_dir() -> Result<PathBuf, String> {
+pub fn get_dir() -> Result<PathBuf, Whatever> {
     let path = PathBuf::from("/etc/pax");
     if !path.exists() && DirBuilder::new().create(&path).is_err() {
-        err!("Failed to create pax directory!")
+        whatever!("Failed to create pax directory!")
     } else {
         Ok(path)
     }
 }
 
-pub fn get_metadata_dir() -> Result<PathBuf, String> {
+pub fn get_metadata_dir() -> Result<PathBuf, Whatever> {
     let mut path = get_dir()?;
     path.push("installed");
     if !path.exists() && DirBuilder::new().create(&path).is_err() {
-        err!("Failed to create pax installation directory!")
+        whatever!("Failed to create pax installation directory!")
     } else {
         Ok(path)
     }
 }
 
-pub fn get_update_dir() -> Result<PathBuf, String> {
+pub fn get_update_dir() -> Result<PathBuf, Whatever> {
     let mut path = get_dir()?;
     path.push("updates");
     if !path.exists() && DirBuilder::new().create(&path).is_err() {
-        err!("Failed to create pax installation directory!")
+        whatever!("Failed to create pax installation directory!")
     } else {
         Ok(path)
     }
@@ -89,13 +90,7 @@ pub fn specific_flag() -> Flag {
     )
 }
 
-// I learned this basic macro from Kernel dev
-#[macro_export]
-macro_rules! err {
-    ($fmt:literal $(, $args:expr)*) => {Err(format!($fmt $(, $args)*))};
-}
-
-pub fn choice(message: &str, default_yes: bool) -> Result<bool, String> {
+pub fn choice(message: &str, default_yes: bool) -> Result<bool, Whatever> {
     print!(
         "{} [{}]: ",
         message,
@@ -103,9 +98,9 @@ pub fn choice(message: &str, default_yes: bool) -> Result<bool, String> {
     );
     let _ = std::io::stdout().flush();
     let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() {
-        return err!("\nFailed to read terminal input!");
-    }
+    std::io::stdin()
+        .read_line(&mut input)
+        .whatever_context("\nFailed to read terminal input!")?;
     if default_yes {
         if ["no", "n", "false", "f"].contains(&input.to_lowercase().trim()) {
             Ok(false)
@@ -140,7 +135,7 @@ pub struct Version {
 }
 
 impl Version {
-    pub fn parse(src: &str) -> Result<Self, String> {
+    pub fn parse(src: &str) -> Result<Self, Whatever> {
         let (src, build) = src
             .split_once('+')
             .map(|x| (x.0, Some(x.1.to_string())))
@@ -157,7 +152,7 @@ impl Version {
                         if split.len() >= 3 {
                             if let Ok(patch) = split[2].parse::<usize>() {
                                 if split.len() > 3 {
-                                    err!("Two many segments in version!")
+                                    whatever!("Two many segments in version!")
                                 } else {
                                     Ok(Self {
                                         major,
@@ -168,7 +163,7 @@ impl Version {
                                     })
                                 }
                             } else {
-                                err!("Expected patch to be a number, got `{}`!", split[1])
+                                whatever!("Expected patch to be a number, got `{}`!", split[1])
                             }
                         } else {
                             Ok(Self {
@@ -180,7 +175,7 @@ impl Version {
                             })
                         }
                     } else {
-                        err!("Expected minor to be a number, got `{}`!", split[1])
+                        whatever!("Expected minor to be a number, got `{}`!", split[1])
                     }
                 } else {
                     Ok(Self {
@@ -192,10 +187,10 @@ impl Version {
                     })
                 }
             } else {
-                err!("Expected major to be a number, got `{}`!", split[0])
+                whatever!("Expected major to be a number, got `{}`!", split[0])
             }
         } else {
-            err!("A version must be specified!")
+            whatever!("A version must be specified!")
         }
     }
 }
