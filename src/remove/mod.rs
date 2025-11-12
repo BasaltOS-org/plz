@@ -1,9 +1,13 @@
 use commands::Command;
 use metadata::get_local_deps;
 use settings::acquire_lock;
+use snafu::ResultExt;
 use statebox::StateBox;
 use tokio::runtime::Runtime;
-use utils::{PostAction, choice};
+use utils::{
+    FuckWrap, PostAction, choice,
+    errors::{RuntimeSnafu, WhatError, WhereError},
+};
 
 pub fn build_remove(hierarchy: &[String]) -> Command {
     Command::new(
@@ -40,7 +44,11 @@ fn purge(states: &StateBox, args: Option<&[String]>) -> PostAction {
 fn run(states: &StateBox, args: Option<&[String]>, purge: bool) -> PostAction {
     match acquire_lock() {
         Ok(Some(action)) => return action,
-        Err(fault) => return PostAction::Fuck(fault),
+        Err(source) => {
+            return PostAction::Fuck(WhatError::Remove {
+                source: WhereError::WrappedError { source },
+            });
+        }
         _ => (),
     }
     let mut args = match args {
@@ -57,10 +65,9 @@ fn run(states: &StateBox, args: Option<&[String]>, purge: bool) -> PostAction {
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    let Ok(runtime) = Runtime::new() else {
-        return PostAction::Fuck(snafu::FromString::without_source(String::from(
-            "Error creating runtime!",
-        )));
+    let runtime = match Runtime::new().context(RuntimeSnafu).wrap() {
+        Ok(runtime) => runtime,
+        Err(source) => return PostAction::Fuck(WhatError::Remove { source }),
     };
     match runtime.block_on(get_local_deps(&data)) {
         Ok(metadatas) => {
@@ -88,23 +95,27 @@ fn run(states: &StateBox, args: Option<&[String]>, purge: bool) -> PostAction {
                 );
                 if states.get("yes").is_none_or(|x: &bool| !*x) {
                     match choice("Continue?", true) {
-                        Err(message) => return PostAction::Fuck(message),
+                        Err(source) => {
+                            return PostAction::Fuck(WhatError::Remove {
+                                source: WhereError::WrappedError { source },
+                            });
+                        }
                         Ok(false) => {
-                            return PostAction::Fuck(snafu::FromString::without_source(
-                                String::from("Aborted."),
-                            ));
+                            return PostAction::Fuck(WhatError::Remove {
+                                source: WhereError::other("Aborted."),
+                            });
                         }
                         Ok(true) => (),
                     };
                 }
             }
             for package in metadatas.primary {
-                if let Err(fault) = package.remove(purge) {
-                    return PostAction::Fuck(fault);
+                if let Err(source) = package.remove(purge) {
+                    return PostAction::Fuck(WhatError::Remove { source });
                 };
             }
             PostAction::Return
         }
-        Err(fault) => PostAction::Fuck(fault),
+        Err(source) => PostAction::Fuck(WhatError::Remove { source }),
     }
 }

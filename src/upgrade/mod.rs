@@ -2,7 +2,10 @@ use commands::Command;
 use metadata::{upgrade_all, upgrade_only, upgrade_packages};
 use settings::acquire_lock;
 use statebox::StateBox;
-use utils::{PostAction, choice};
+use utils::{
+    PostAction, choice,
+    errors::{WhatError, WhereError},
+};
 
 pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
@@ -19,7 +22,11 @@ pub fn build(hierarchy: &[String]) -> Command {
 fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
     match acquire_lock() {
         Ok(Some(action)) => return action,
-        Err(fault) => return PostAction::Fuck(fault),
+        Err(source) => {
+            return PostAction::Fuck(WhatError::Upgrade {
+                source: WhereError::WrappedError { source },
+            });
+        }
 
         _ => (),
     }
@@ -45,7 +52,7 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
         upgrade_only(&args)
     } {
         Ok(data) => data,
-        Err(fault) => return PostAction::Fuck(fault),
+        Err(source) => return PostAction::Fuck(WhatError::Upgrade { source }),
     };
     if data.is_empty() {
         return PostAction::NothingToDo;
@@ -58,17 +65,21 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
     );
     if states.get("yes").is_none_or(|x: &bool| !*x) {
         match choice("Continue?", true) {
-            Err(message) => return PostAction::Fuck(message),
+            Err(source) => {
+                return PostAction::Fuck(WhatError::Upgrade {
+                    source: WhereError::WrappedError { source },
+                });
+            }
             Ok(false) => {
-                return PostAction::Fuck(snafu::FromString::without_source(String::from(
-                    "Aborted",
-                )));
+                return PostAction::Fuck(WhatError::Upgrade {
+                    source: WhereError::other("Aborted."),
+                });
             }
             Ok(true) => (),
         };
     }
     if let Err(fault) = upgrade_packages(&data) {
-        return PostAction::Fuck(fault);
+        return PostAction::Fuck(WhatError::Upgrade { source: fault });
     }
     PostAction::Return
 }

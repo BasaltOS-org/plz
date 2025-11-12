@@ -1,15 +1,17 @@
 use serde::{Deserialize, Serialize};
 use settings::OriginKind;
-use snafu::{OptionExt, ResultExt, Whatever, whatever};
+use snafu::{OptionExt, ResultExt};
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     path::Path,
 };
-use utils::get_metadata_dir;
+use utils::{
+    errors::{HowError, IOAction, IOSnafu, SystemSnafu, WhereError, YAMLSnafu},
+    get_metadata_dir,
+};
 
-use crate::processed::PreBuilt;
-use crate::{DepVer, MetaDataKind, Specific};
+use crate::{DepVer, FuckNest, FuckWrap, MetaDataKind, Specific, processed::PreBuilt};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct InstalledMetaData {
@@ -25,51 +27,73 @@ pub struct InstalledMetaData {
 }
 
 impl InstalledMetaData {
-    pub fn open(name: &str) -> Result<Self, Whatever> {
-        let mut path = get_metadata_dir()?;
+    pub fn open(name: &str) -> Result<Self, WhereError> {
+        let mut path = get_metadata_dir().nest("Get Metadata Directory")?;
         path.push(format!("{}.yaml", name));
         let mut file = File::open(&path)
-            .with_whatever_context(|_| format!("Failed to read package `{name}`'s metadata!"))?;
+            .context(IOSnafu {
+                action: IOAction::OpenFile,
+                loc: path.display().to_string(),
+            })
+            .wrap()?;
         let mut metadata = String::new();
         file.read_to_string(&mut metadata)
-            .with_whatever_context(|_| format!("Failed to read package `{name}`'s config!"))?;
+            .context(IOSnafu {
+                action: IOAction::ReadFile,
+                loc: path.display().to_string(),
+            })
+            .wrap()?;
         serde_norway::from_str::<Self>(&metadata)
-            .with_whatever_context(|_| format!("Failed to parse package `{name}`'s data!"))
+            .context(YAMLSnafu {
+                loc: path.display().to_string(),
+            })
+            .wrap()
     }
-    pub fn write(self, path: &Path) -> Result<Option<Self>, Whatever> {
+    pub fn write(self, path: &Path) -> Result<Option<Self>, WhereError> {
         if !path.exists() || path.is_file() {
-            let data = serde_norway::to_string(&self).with_whatever_context(|_| {
-                format!(
-                    "Failed to parse `{}`'s InstalledMetaData into string!",
-                    self.name
-                )
-            })?;
-            let mut file = File::create(path).with_whatever_context(|_| {
-                format!("Failed to open file for `{}` as WO!", self.name)
-            })?;
+            let data = serde_norway::to_string(&self)
+                .context(YAMLSnafu {
+                    loc: self.name.to_string(),
+                })
+                .wrap()?;
+            let mut file = File::create(path)
+                .context(IOSnafu {
+                    action: IOAction::CreateFile,
+                    loc: path.display().to_string(),
+                })
+                .wrap()?;
             file.write_all(data.as_bytes())
-                .with_whatever_context(|_| format!("Failed to write `{}` to file!", self.name))?;
+                .context(IOSnafu {
+                    action: IOAction::WriteFile,
+                    loc: path.display().to_string(),
+                })
+                .wrap()?;
             Ok(Some(self))
         } else {
-            whatever!("File is of unexpected type!")
+            Err(HowError::IOError {
+                source: ErrorKind::NotSeekable.into(),
+                action: IOAction::AssertPath,
+                loc: path.display().to_string().into(),
+            })
+            .wrap()
         }
     }
-    pub fn clear_dependencies(&self, specific: &Specific) -> Result<(), Whatever> {
-        let mut path = get_metadata_dir()?;
+    pub fn clear_dependencies(&self, specific: &Specific) -> Result<(), WhereError> {
+        let mut path = get_metadata_dir().nest("Get Metadata Directory")?;
         let mut data = self.clone();
         let index = &data
             .dependencies
             .iter()
             .position(|x| x.get_installed_specific().is_ok_and(|x| x == *specific))
-            .with_whatever_context(|| {
-                format!(
-                    "`{}` {} didn't contain dependent `{}`!",
-                    data.name, data.version, specific.name
-                )
-            })?;
+            .context(SystemSnafu {
+                message: format!("Dependent `{}` {} not found", data.name, data.version),
+                package: specific.name.to_string(),
+            })
+            .wrap()?;
         data.dependencies.remove(*index);
         path.push(format!("{}.yaml", self.name));
-        data.write(&path)?;
+        data.write(&path)
+            .nest("Write Changes to Package Metadata")?;
         Ok(())
     }
 }

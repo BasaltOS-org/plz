@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use settings::{Arch, OriginKind};
-use snafu::{OptionExt, ResultExt, Whatever, whatever};
+use snafu::{OptionExt, ResultExt, location};
 use std::hash::Hash;
 use std::{
     collections::HashSet,
@@ -10,12 +10,13 @@ use std::{
     process::Command as RunCommand,
 };
 use tokio::runtime::Runtime;
+use utils::errors::{IOAction, IOSnafu, NetSnafu, SystemSnafu, WhereError, YAMLSnafu};
 use utils::{Version, get_update_dir, tmpfile};
 
-use crate::parsers::apt::RawApt;
 use crate::{
-    DepVer, DependKind, InstallPackage, InstalledInstallKind, InstalledMetaData, MetaDataKind,
-    Specific, get_metadata_path, installed::InstalledCompilable, pax::RawPax,
+    DepVer, DependKind, FuckNest, FuckWrap, InstallPackage, InstalledInstallKind,
+    InstalledMetaData, MetaDataKind, Specific, get_metadata_path, installed::InstalledCompilable,
+    parsers::apt::RawApt, pax::RawPax,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -82,7 +83,7 @@ impl ProcessedMetaData {
             hash: self.hash.to_string(),
         }
     }
-    pub async fn install_package(self) -> Result<(), Whatever> {
+    pub async fn install_package(self) -> Result<(), WhereError> {
         let name = self.name.to_string();
         println!("Installing {name}...");
         let (path, _) = get_metadata_path(&name)?;
@@ -90,37 +91,55 @@ impl ProcessedMetaData {
         let deps = metadata.dependencies.clone();
         let ver = metadata.version.to_string();
         for dependent in metadata.dependents.iter_mut() {
-            let their_metadata = InstalledMetaData::open(&dependent.name)?;
+            let their_metadata =
+                InstalledMetaData::open(&dependent.name).nest("Locate Package Metadata")?;
             *dependent = Specific {
                 name: dependent.name.to_string(),
-                version: Version::parse(&their_metadata.version)?,
+                version: Version::parse(&their_metadata.version).wrap()?,
             }
         }
-        let tmpfile =
-            tmpfile().with_whatever_context(|| format!("Failed to reserve a file for {name}!"))?;
+        let tmpfile = tmpfile()
+            .context(SystemSnafu {
+                message: "Failed to reserve a file",
+                package: name.to_string(),
+            })
+            .wrap()?;
         let mut file = File::create(&tmpfile.0)
-            .with_whatever_context(|_| format!("Failed to open temporary file {}!", tmpfile.1))?;
+            .context(IOSnafu {
+                action: IOAction::CreateFile,
+                loc: path.display().to_string(),
+            })
+            .wrap()?;
         let endpoint = match self.origin {
             OriginKind::Pax(pax) => format!("{pax}?v={}", self.version),
             OriginKind::Github { user: _, repo: _ } => {
-                whatever!("Github is not implemented yet!") // thingy
+                return Err(WhereError::debug(location!()));
+                // thingy
             }
-            OriginKind::Apt(_) => {
-                whatever!("DitherNude")
-            }
+            OriginKind::Apt(_) => return Err(WhereError::debug(location!())),
         };
-        let response = reqwest::get(endpoint)
+        let response = reqwest::get(&endpoint)
             .await
-            .whatever_context("Failed to pull PAX file data!")?;
+            .context(NetSnafu {
+                loc: endpoint.to_string(),
+            })
+            .wrap()?;
         let body = response
             .text()
             .await
-            .whatever_context("Failed to download PAX file data!")?;
+            .context(NetSnafu {
+                loc: endpoint.to_string(),
+            })
+            .wrap()?;
         file.write_all(body.as_bytes())
-            .whatever_context("Failed to write downloaded PAX file to TMP file!")?;
+            .context(IOSnafu {
+                action: IOAction::WriteFile,
+                loc: tmpfile.0.display().to_string(),
+            })
+            .wrap()?;
         match self.install_kind {
             ProcessedInstallKind::PreBuilt(_) => {
-                whatever!("PreBuilt is not implemented yet!") //thingy
+                return Err(WhereError::debug(location!())); //thingy
             }
             ProcessedInstallKind::Compilable(compilable) => {
                 let build = compilable.build.replace("{$~}", &tmpfile.1);
@@ -129,28 +148,37 @@ impl ProcessedMetaData {
                     .arg("-c")
                     .arg(build)
                     .status()
-                    .with_whatever_context(|_| {
-                        format!("Failed to build package `{}`!", self.name)
-                    })?;
+                    .context(IOSnafu {
+                        action: IOAction::TermStatus,
+                        loc: "Build Package Script",
+                    })
+                    .wrap()?;
                 let install = compilable.install.replace("{$~}", &tmpfile.1);
                 let mut command = RunCommand::new("/usr/bin/bash");
                 command
                     .arg("-c")
                     .arg(install)
                     .status()
-                    .with_whatever_context(|_| {
-                        format!("Failed to install package `{}`!", self.name)
-                    })?;
+                    .context(IOSnafu {
+                        action: IOAction::TermStatus,
+                        loc: "Install Package Script",
+                    })
+                    .wrap()?;
             }
         }
-        metadata.write(&path)?;
+        metadata
+            .write(&path)
+            .nest("Write Changes to Package Metadata")?;
         for dep in deps {
-            let dep = dep.get_installed_specific()?;
-            dep.write_dependent(&name, &ver)?;
+            let dep = dep
+                .get_installed_specific()
+                .nest("Convert to Installed `Specific`")?;
+            dep.write_dependent(&name, &ver)
+                .nest("Add Dependent to Dependency Metadata")?;
         }
         Ok(())
     }
-    pub fn write(self, base: &Path, inc: &mut usize) -> Result<Self, Whatever> {
+    pub fn write(self, base: &Path, inc: &mut usize) -> Result<Self, WhereError> {
         let path = loop {
             let mut path = base.to_path_buf();
             path.push(format!("{inc}.yaml"));
@@ -160,24 +188,46 @@ impl ProcessedMetaData {
             }
             break path;
         };
-        let mut file =
-            File::create(&path).whatever_context("Failed to open upgrade metadata as WO!")?;
+        let mut file = File::create(&path)
+            .context(IOSnafu {
+                action: IOAction::CreateFile,
+                loc: path.display().to_string(),
+            })
+            .wrap()?;
         let data = serde_norway::to_string(&self)
-            .whatever_context("Failed to parse upgrade metadata to string!")?;
+            .context(YAMLSnafu {
+                loc: self.name.to_string(),
+            })
+            .wrap()?;
         file.write_all(data.as_bytes())
-            .whatever_context("Failed to write upgrade metadata file!")?;
+            .context(IOSnafu {
+                action: IOAction::WriteFile,
+                loc: path.display().to_string(),
+            })
+            .wrap()?;
         Ok(self)
     }
-    pub fn open(name: &str) -> Result<Self, Whatever> {
-        let mut path = get_update_dir()?;
+    pub fn open(name: &str) -> Result<Self, WhereError> {
+        let mut path = get_update_dir().wrap()?;
         path.push(format!("{}.yaml", name));
         let mut file = File::open(&path)
-            .with_whatever_context(|_| format!("Failed to read package `{name}`'s metadata!"))?;
+            .context(IOSnafu {
+                action: IOAction::OpenFile,
+                loc: path.display().to_string(),
+            })
+            .wrap()?;
         let mut metadata = String::new();
         file.read_to_string(&mut metadata)
-            .with_whatever_context(|_| format!("Failed to read package `{name}`'s config!"))?;
+            .context(IOSnafu {
+                action: IOAction::ReadFile,
+                loc: path.display().to_string(),
+            })
+            .wrap()?;
         serde_norway::from_str::<Self>(&metadata)
-            .with_whatever_context(|_| format!("Failed to parse package `{name}`'s data!"))
+            .context(YAMLSnafu {
+                loc: path.display().to_string(),
+            })
+            .wrap()
     }
     pub async fn get_metadata(
         name: &str,
@@ -237,19 +287,26 @@ impl ProcessedMetaData {
         }
         metadata
     }
-    pub fn remove_update_cache(&self) -> Result<(), Whatever> {
-        let path = get_update_dir()?;
-        let dir = fs::read_dir(&path).with_whatever_context(|_| {
-            format!("Failed to read {} as a directory!", path.display())
-        })?;
+    pub fn remove_update_cache(&self) -> Result<(), WhereError> {
+        let path = get_update_dir().wrap()?;
+        let dir = fs::read_dir(&path)
+            .context(IOSnafu {
+                action: IOAction::ReadDir,
+                loc: path.display().to_string(),
+            })
+            .wrap()?;
         for file in dir.flatten() {
-            if let Some(name) = file.path().file_prefix() {
+            let path = file.path();
+            if let Some(name) = path.file_prefix() {
                 let name = name.to_string_lossy();
                 let data = Self::open(&name)?;
                 if data.name == self.name {
-                    return fs::remove_file(file.path()).with_whatever_context(|_| {
-                        format!("Couldn't remove update cache for {}!", data.name)
-                    });
+                    return fs::remove_file(&path)
+                        .context(IOSnafu {
+                            action: IOAction::RemoveFile,
+                            loc: path.display().to_string(),
+                        })
+                        .wrap();
                 }
             }
         }
@@ -263,24 +320,28 @@ impl ProcessedMetaData {
         metadata: &Self,
         sources: &[OriginKind],
         prior: &mut HashSet<Specific>,
-    ) -> Result<InstallPackage, Whatever> {
+    ) -> Result<InstallPackage, WhereError> {
         let mut package = InstallPackage {
             metadata: metadata.clone(),
             build_deps: Vec::new(),
             run_deps: Vec::new(),
         };
         package.build_deps =
-            DependKind::batch_as_installed(&metadata.build_dependencies, sources, prior).await?;
+            DependKind::batch_as_installed(&metadata.build_dependencies, sources, prior)
+                .await
+                .nest("Batch Convert to InstalledMetadata")?;
         package.run_deps =
-            DependKind::batch_as_installed(&metadata.runtime_dependencies, sources, prior).await?;
+            DependKind::batch_as_installed(&metadata.runtime_dependencies, sources, prior)
+                .await
+                .nest("Batch Convert to InstalledMetadata")?;
         Ok(package)
     }
     pub fn upgrade_package(
         &self,
         sources: &[OriginKind],
         runtime: &Runtime,
-    ) -> Result<(), Whatever> {
-        let version = Version::parse(&self.version)?;
+    ) -> Result<(), WhereError> {
+        let version = Version::parse(&self.version).wrap()?;
         let specific = self.as_specific()?;
         let Ok(installed) = InstalledMetaData::open(&self.name) else {
             println!(
@@ -322,23 +383,30 @@ impl ProcessedMetaData {
         stale_installed.retain(|x| !in_place_upgrade.iter().any(|y| y.name() == x.name));
         let children = children
             .into_iter()
-            .map(|x| runtime.block_on(x))
-            .collect::<Result<Vec<ProcessedMetaData>, Whatever>>()?;
+            .map(|x| runtime.block_on(x).nest("Pull Package Metadata"))
+            .collect::<Result<Vec<ProcessedMetaData>, WhereError>>()?;
         children
             .into_iter()
             .try_for_each(|x| match runtime.block_on(x.install_package()) {
                 Ok(_path) => Ok(()),
-                Err(fault) => Err(fault),
+                Err(fault) => Err(fault).nest("Install Package"),
             })?;
         for stale in stale_installed {
-            stale.get_installed_specific()?.remove(false)?;
+            stale
+                .get_installed_specific()?
+                .remove(false)
+                .nest("Remove/Purge Package")?;
         }
         for dep in new_deps {
             if let Some(dep_ver) = dep.as_dep_ver() {
-                let installed_metadata = InstalledMetaData::open(&dep_ver.name)?;
+                let installed_metadata =
+                    InstalledMetaData::open(&dep_ver.name).nest("Locate Package Metadata")?;
                 let metadata = runtime
-                    .block_on(dep_ver.pull_metadata(Some(sources), installed_metadata.dependent))?;
-                runtime.block_on(metadata.install_package())?;
+                    .block_on(dep_ver.pull_metadata(Some(sources), installed_metadata.dependent))
+                    .nest("Locate Package Metadata")?;
+                runtime
+                    .block_on(metadata.install_package())
+                    .nest("Install Package")?;
             }
         }
         for package in in_place_upgrade {
@@ -346,28 +414,40 @@ impl ProcessedMetaData {
                 let name = dep_ver.name.to_string();
                 let (path, metadata) = get_metadata_path(&name)?;
                 let old_metadata = metadata
-                    .with_whatever_context(|| format!("Cannot find data for package `{name}`!"))?;
+                    .context(SystemSnafu {
+                        message: "Cannot find data",
+                        package: name.to_string(),
+                    })
+                    .wrap()?;
                 let metadata = runtime
-                    .block_on(dep_ver.pull_metadata(Some(sources), old_metadata.dependent))?;
+                    .block_on(dep_ver.pull_metadata(Some(sources), old_metadata.dependent))
+                    .nest("Locate Package Metadata")?;
                 if metadata.version != old_metadata.version {
-                    runtime.block_on(metadata.install_package())?;
+                    runtime
+                        .block_on(metadata.install_package())
+                        .nest("Install Package")?;
                 }
-                let mut metadata = InstalledMetaData::open(&name)?;
+                let mut metadata =
+                    InstalledMetaData::open(&name).nest("Locate Package Metadata")?;
                 if let Some(found) = metadata.dependents.iter_mut().find(|x| x.name == self.name) {
                     found.version = version.clone();
                 } else {
                     metadata.dependents.push(specific.clone());
                 };
-                metadata.write(&path)?;
+                metadata
+                    .write(&path)
+                    .nest("Write Changes to Package Metadata")?;
             }
         }
-        runtime.block_on(self.clone().install_package())?;
+        runtime
+            .block_on(self.clone().install_package())
+            .nest("Install Package")?;
         Ok(())
     }
-    pub fn as_specific(&self) -> Result<Specific, Whatever> {
+    pub fn as_specific(&self) -> Result<Specific, WhereError> {
         Ok(Specific {
             name: self.name.to_string(),
-            version: dbg!(Version::parse(&self.version))?,
+            version: dbg!(Version::parse(&self.version)).wrap()?,
         })
     }
 }

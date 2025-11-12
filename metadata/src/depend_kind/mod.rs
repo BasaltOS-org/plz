@@ -2,10 +2,16 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 use settings::OriginKind;
-use snafu::{OptionExt, Whatever};
-use utils::{Range, VerReq, Version, command};
+use snafu::OptionExt;
+use utils::{
+    Range, VerReq, Version, command,
+    errors::{SystemSnafu, WhereError},
+};
 
-use crate::{DepVer, InstallPackage, Specific, get_metadata_path, processed::ProcessedMetaData};
+use crate::{
+    DepVer, FuckNest, FuckWrap, InstallPackage, Specific, get_metadata_path,
+    processed::ProcessedMetaData,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum DependKind {
@@ -49,19 +55,25 @@ impl DependKind {
         deps: &[Self],
         sources: &[OriginKind],
         prior: &mut HashSet<Specific>,
-    ) -> Result<Vec<InstallPackage>, Whatever> {
+    ) -> Result<Vec<InstallPackage>, WhereError> {
         let mut result = Vec::new();
         for dep in deps {
             let dep = match dep {
                 Self::Latest(latest) => {
                     ProcessedMetaData::get_metadata(latest, None, sources, true)
                         .await
-                        .with_whatever_context(|| {
-                            format!("Failed to locate latest version of dependency `{latest}`")
-                        })?
+                        .context(SystemSnafu {
+                            message: "Discovery failed",
+                            package: latest.to_string(),
+                        })
+                        .wrap()?
                 }
                 Self::Specific(dep_ver) => {
-                    let specific = dep_ver.clone().pull_metadata(Some(sources), true).await?;
+                    let specific = dep_ver
+                        .clone()
+                        .pull_metadata(Some(sources), true)
+                        .await
+                        .nest("Locate Package Metadata")?;
                     ProcessedMetaData::get_metadata(
                         &specific.name,
                         Some(&specific.version.to_string()),
@@ -69,29 +81,36 @@ impl DependKind {
                         true,
                     )
                     .await
-                    .with_whatever_context(|| {
-                        format!(
-                            "Failed to locate dependency `{}` version {}!",
-                            specific.name, specific.version
-                        )
-                    })?
+                    .context(SystemSnafu {
+                        message: format!("Failed to locate version {}", specific.version),
+                        package: specific.name,
+                    })
+                    .wrap()?
                 }
                 Self::Volatile(volatile) => {
                     let result = command("/usr/bin/which", &[volatile], None);
                     if result.is_some_and(|x| x == 0) {
                         continue;
                     } else {
-                        ProcessedMetaData::get_metadata(volatile, None, sources, true).await.with_whatever_context(|| format!("Failed to locate latest version of volatile dependency `{volatile}`"))?
+                        ProcessedMetaData::get_metadata(volatile, None, sources, true)
+                            .await
+                            .context(SystemSnafu {
+                                message: "Volatile discovery failed",
+                                package: volatile.to_string(),
+                            })
+                            .wrap()?
                     }
                 }
             };
             let specific = Specific {
                 name: dep.name.to_string(),
-                version: Version::parse(&dep.version)?,
+                version: Version::parse(&dep.version).wrap()?,
             };
             if !prior.contains(&specific) {
                 prior.insert(specific);
-                let child = Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior)).await?;
+                let child = Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior))
+                    .await
+                    .nest("Get Package Dependencies")?;
                 result.push(child);
             }
         }

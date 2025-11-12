@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fs::File,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
 };
 
 use debian_control::{
@@ -10,10 +10,15 @@ use debian_control::{
 };
 use lazy_regex::regex_captures_iter;
 use settings::Arch;
-use snafu::{OptionExt, ResultExt, Whatever, whatever};
-use utils::{Range, VerReq, Version, tmpdir};
+use snafu::{OptionExt, ResultExt};
+use utils::{
+    Range, VerReq, Version,
+    errors::{HowError, IOAction, IOSnafu, NetSnafu, SystemSnafu, WhereError},
+    tmpdir,
+};
 
 use crate::{
+    FuckWrap,
     depend_kind::DependKind,
     processed::{PreBuilt, ProcessedMetaData},
     versioning::DepVer,
@@ -74,42 +79,70 @@ impl RawApt {
         name: &str,
         version: &str,
         dependent: bool,
-    ) -> Result<ProcessedMetaData, Whatever> {
+    ) -> Result<ProcessedMetaData, WhereError> {
         let folder = if name.starts_with("lib") && name.len() > 3 {
             name[0..4].to_string()
         } else if !name.is_empty() {
             name[0..1].to_string()
         } else {
-            whatever!("`{name}` is not a valid APT package name!")
+            return Err(HowError::SystemError {
+                message: "Invalid requested package name".into(),
+                package: name.to_string().into(),
+            })
+            .wrap();
         };
         let origin = format!("{mirror}/{folder}/{name}");
         let endpoint = format!("{origin}/{version}.deb");
-        let response = reqwest::get(&endpoint).await.with_whatever_context(|_| {
-            format!("Failed to pull APT package data for package `{name}`!")
-        })?;
-        let body = response.bytes().await.with_whatever_context(|_| {
-            format!("Failed to read pulled APT data for package `{name}`!")
-        })?;
-        let path = tmpdir().with_whatever_context(|| {
-            format!("Failed to allocate a tmp file for package `{name}`!")
-        })?;
+        let response = reqwest::get(&endpoint)
+            .await
+            .context(NetSnafu {
+                loc: endpoint.to_string(),
+            })
+            .wrap()?;
+        let body = response
+            .bytes()
+            .await
+            .context(NetSnafu { loc: endpoint })
+            .wrap()?;
+        let path = tmpdir()
+            .context(SystemSnafu {
+                message: "Failed to reserve a directory",
+                package: name.to_string(),
+            })
+            .wrap()?;
         let deb = path.0.join("deb");
         let mut file = File::create(&deb)
-            .with_whatever_context(|_| format!("Failed to open tmp file for package `{name}`!"))?;
+            .context(IOSnafu {
+                action: IOAction::CreateFile,
+                loc: deb.display().to_string(),
+            })
+            .wrap()?;
         file.write_all(&body)
-            .with_whatever_context(|_| format!("Failed to write package `{name}`!"))?;
+            .context(IOSnafu {
+                action: IOAction::WriteFile,
+                loc: deb.display().to_string(),
+            })
+            .wrap()?;
         let result = utils::command(
             "/usr/bin/ar",
             &["-x", &deb.to_string_lossy()],
             Some(&path.1),
         );
         if result.is_none_or(|x| x != 0) {
-            whatever!("Failed to unpack `{name}`!")
+            return Err(HowError::SystemError {
+                message: "Unpack failed".into(),
+                package: name.to_string().into(),
+            })
+            .wrap();
         }
         let dir = path
             .0
             .read_dir()
-            .with_whatever_context(|_| format!("{} is not a directory!", &path.0.display()))?;
+            .context(IOSnafu {
+                action: IOAction::ReadDir,
+                loc: path.0.display().to_string(),
+            })
+            .wrap()?;
         for entry in dir.flatten() {
             let file_path = entry.path();
             if let Some(Some(ext)) = file_path.extension().map(|x| x.to_str()) {
@@ -125,31 +158,60 @@ impl RawApt {
                     Some(&path.1),
                 );
                 if result.is_none_or(|x| x != 0) {
-                    whatever!("Failed to untar `{}`!", file_path.to_string_lossy())
+                    return Err(HowError::SystemError {
+                        message: "Untar failed".into(),
+                        package: file_path.display().to_string().into(),
+                    })
+                    .wrap();
                 }
             }
         }
-        let mut control = File::open(path.0.join("control"))
-            .with_whatever_context(|_| format!("Missing control file for package `{name}`!"))?;
+        let control_p = path.0.join("control");
+        let mut control = File::open(&control_p)
+            .context(IOSnafu {
+                action: IOAction::OpenFile,
+                loc: control_p.display().to_string(),
+            })
+            .wrap()?;
         let mut c_data = String::new();
         control
             .read_to_string(&mut c_data)
-            .with_whatever_context(|_| {
-                format!("Failed to read control file for package `{name}`!")
-            })?;
-        let control = Control::parse(&c_data)
-            .to_result()
-            .with_whatever_context(|_| format!("Corrupted control file for package `{name}`!"))?;
-        let binary = control.binaries().next().with_whatever_context(|| {
-            format!("Control file for package `{name}` is missing binary information!")
-        })?;
+            .context(IOSnafu {
+                action: IOAction::ReadFile,
+                loc: control_p.display().to_string(),
+            })
+            .wrap()?;
+        let Ok(control) = Control::parse(&c_data).to_result() else {
+            return Err(HowError::IOError {
+                source: ErrorKind::InvalidData.into(),
+                action: IOAction::CorruptedFile,
+                loc: control_p.display().to_string().into(),
+            })
+            .wrap();
+        };
+        let binary = control
+            .binaries()
+            .next()
+            .context(SystemSnafu {
+                message: "Missing data in control file",
+                package: name.to_string(),
+            })
+            .wrap()?;
         dbg!(binary.to_string());
         let arch = Self::get_arch(&binary.architecture().unwrap_or_default());
-        if !arch.is_compatible(name)? {
-            whatever!("Package `{name}` is not compatible with this machine's architecture!")
+        if !arch.is_compatible(name).wrap()? {
+            return Err(HowError::SystemError {
+                message: "Incompatible machine architecture".into(),
+                package: name.to_string().into(),
+            })
+            .wrap();
         }
         Self::to_processed(&binary, version, &origin, dependent)
-            .with_whatever_context(|| format!("Invalid control file for package `{name}`!"))
+            .context(SystemSnafu {
+                message: "Invalid control file",
+                package: name.to_string(),
+            })
+            .wrap()
     }
     pub fn to_processed(
         binary: &Binary,

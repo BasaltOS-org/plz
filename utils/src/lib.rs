@@ -3,46 +3,62 @@ use std::{cmp::Ordering, fs::DirBuilder, io::Write, path::PathBuf, process::Comm
 use flags::Flag;
 use nix::unistd;
 use serde::{Deserialize, Serialize};
-use snafu::{ResultExt, Whatever, whatever};
+use snafu::ResultExt;
+
+use crate::errors::{
+    HowError, IOAction, IOSnafu, NestedSnafu, WhatError, WhereError, WrappedSnafu,
+};
+
+pub mod errors;
 
 // The action to perform once a command has run
 pub enum PostAction {
     Elevate,
     Err(i32),
-    Fuck(Whatever),
+    Fuck(WhatError),
     GetHelp,
     NothingToDo,
     PullSources,
     Return,
 }
 
-pub fn get_dir() -> Result<PathBuf, Whatever> {
-    let path = PathBuf::from("/etc/pax");
-    if !path.exists() && DirBuilder::new().create(&path).is_err() {
-        whatever!("Failed to create pax directory!")
-    } else {
-        Ok(path)
-    }
+pub fn get_dir() -> Result<PathBuf, HowError> {
+    let loc = "/etc/pax";
+    let path = PathBuf::from(loc);
+    DirBuilder::new()
+        .recursive(true)
+        .create(&path)
+        .context(IOSnafu {
+            action: IOAction::CreateDir,
+            loc,
+        })?;
+    Ok(path)
 }
 
-pub fn get_metadata_dir() -> Result<PathBuf, Whatever> {
+pub fn get_metadata_dir() -> Result<PathBuf, HowError> {
     let mut path = get_dir()?;
     path.push("installed");
-    if !path.exists() && DirBuilder::new().create(&path).is_err() {
-        whatever!("Failed to create pax installation directory!")
-    } else {
-        Ok(path)
-    }
+    DirBuilder::new()
+        .recursive(true)
+        .create(&path)
+        .context(IOSnafu {
+            action: IOAction::CreateDir,
+            loc: path.display().to_string(),
+        })?;
+    Ok(path)
 }
 
-pub fn get_update_dir() -> Result<PathBuf, Whatever> {
+pub fn get_update_dir() -> Result<PathBuf, HowError> {
     let mut path = get_dir()?;
     path.push("updates");
-    if !path.exists() && DirBuilder::new().create(&path).is_err() {
-        whatever!("Failed to create pax installation directory!")
-    } else {
-        Ok(path)
-    }
+    DirBuilder::new()
+        .recursive(true)
+        .create(&path)
+        .context(IOSnafu {
+            action: IOAction::CreateDir,
+            loc: path.display().to_string(),
+        })?;
+    Ok(path)
 }
 
 pub fn is_root() -> bool {
@@ -90,7 +106,7 @@ pub fn specific_flag() -> Flag {
     )
 }
 
-pub fn choice(message: &str, default_yes: bool) -> Result<bool, Whatever> {
+pub fn choice(message: &str, default_yes: bool) -> Result<bool, HowError> {
     print!(
         "{} [{}]: ",
         message,
@@ -98,9 +114,10 @@ pub fn choice(message: &str, default_yes: bool) -> Result<bool, Whatever> {
     );
     let _ = std::io::stdout().flush();
     let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .whatever_context("\nFailed to read terminal input!")?;
+    std::io::stdin().read_line(&mut input).context(IOSnafu {
+        action: IOAction::TermRead,
+        loc: "CONSOLE",
+    })?;
     if default_yes {
         if ["no", "n", "false", "f"].contains(&input.to_lowercase().trim()) {
             Ok(false)
@@ -125,6 +142,39 @@ pub fn command(name: &str, args: &[&str], pwd: Option<&str>) -> Option<i32> {
     command.status().map(|x| x.code()).ok().flatten()
 }
 
+pub trait FuckWrap<T, E>: Sized {
+    fn wrap<E2: From<WhereError>>(self) -> Result<T, E2>;
+}
+
+pub trait FuckNest<T, E>: Sized {
+    fn nest<E2: From<WhereError>>(self, loc: &'static str) -> Result<T, E2>;
+}
+
+impl<T> FuckWrap<T, HowError> for Result<T, HowError> {
+    fn wrap<E2: From<WhereError>>(self) -> Result<T, E2> {
+        Ok(self.context(WrappedSnafu)?)
+    }
+}
+
+impl<T> FuckNest<T, HowError> for Result<T, HowError> {
+    fn nest<E2: From<WhereError>>(self, loc: &'static str) -> Result<T, E2> {
+        Ok(self.context(NestedSnafu { loc })?)
+    }
+}
+
+impl<T> FuckNest<T, WhereError> for Result<T, WhereError> {
+    fn nest<E2: From<WhereError>>(self, loc: &'static str) -> Result<T, E2> {
+        match self {
+            Ok(t) => Ok(t),
+            Err(source) => Err(WhereError::BoxedError {
+                source: Box::new(source),
+                loc: loc.into(),
+            }
+            .into()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Version {
     pub major: usize,
@@ -135,7 +185,7 @@ pub struct Version {
 }
 
 impl Version {
-    pub fn parse(src: &str) -> Result<Self, Whatever> {
+    pub fn parse(src: &str) -> Result<Self, HowError> {
         let (src, build) = src
             .split_once('+')
             .map(|x| (x.0, Some(x.1.to_string())))
@@ -152,7 +202,10 @@ impl Version {
                         if split.len() >= 3 {
                             if let Ok(patch) = split[2].parse::<usize>() {
                                 if split.len() > 3 {
-                                    whatever!("Two many segments in version!")
+                                    Err(HowError::ParseError {
+                                        message: "Two many segments in version!".into(),
+                                        util: errors::Parsers::Version,
+                                    })
                                 } else {
                                     Ok(Self {
                                         major,
@@ -163,7 +216,14 @@ impl Version {
                                     })
                                 }
                             } else {
-                                whatever!("Expected patch to be a number, got `{}`!", split[1])
+                                Err(HowError::ParseError {
+                                    message: format!(
+                                        "Expected patch to be a number, got `{}`!",
+                                        split[1]
+                                    )
+                                    .into(),
+                                    util: errors::Parsers::Version,
+                                })
                             }
                         } else {
                             Ok(Self {
@@ -175,7 +235,11 @@ impl Version {
                             })
                         }
                     } else {
-                        whatever!("Expected minor to be a number, got `{}`!", split[1])
+                        Err(HowError::ParseError {
+                            message: format!("Expected minor to be a number, got `{}`!", split[1])
+                                .into(),
+                            util: errors::Parsers::Version,
+                        })
                     }
                 } else {
                     Ok(Self {
@@ -187,10 +251,16 @@ impl Version {
                     })
                 }
             } else {
-                whatever!("Expected major to be a number, got `{}`!", split[0])
+                Err(HowError::ParseError {
+                    message: format!("Expected major to be a number, got `{}`!", split[0]).into(),
+                    util: errors::Parsers::Version,
+                })
             }
         } else {
-            whatever!("A version must be specified!")
+            Err(HowError::ParseError {
+                message: "A version must be specified!".into(),
+                util: errors::Parsers::Version,
+            })
         }
     }
 }

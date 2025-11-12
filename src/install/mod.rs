@@ -1,11 +1,13 @@
 use commands::Command;
 use metadata::get_packages;
-use settings::SettingsYaml;
-use settings::acquire_lock;
+use settings::{SettingsYaml, acquire_lock};
+use snafu::ResultExt;
 use statebox::StateBox;
 use tokio::runtime::Runtime;
-use utils::PostAction;
-use utils::choice;
+use utils::{
+    FuckWrap, PostAction, choice,
+    errors::{RuntimeSnafu, WhatError, WhereError},
+};
 
 pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
@@ -22,7 +24,11 @@ pub fn build(hierarchy: &[String]) -> Command {
 fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
     match acquire_lock() {
         Ok(Some(action)) => return action,
-        Err(fault) => return PostAction::Fuck(fault),
+        Err(fault) => {
+            return PostAction::Fuck(WhatError::Install {
+                source: WhereError::WrappedError { source: fault },
+            });
+        }
         _ => (),
     }
     let mut args = match args {
@@ -47,14 +53,13 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    let Ok(runtime) = Runtime::new() else {
-        return PostAction::Fuck(snafu::FromString::without_source(String::from(
-            "Error creating runtime!",
-        )));
+    let runtime = match Runtime::new().context(RuntimeSnafu).wrap() {
+        Ok(runtime) => runtime,
+        Err(source) => return PostAction::Fuck(WhatError::Install { source }),
     };
     let data = match runtime.block_on(get_packages(&data)) {
         Ok(data) => data,
-        Err(fault) => return PostAction::Fuck(fault),
+        Err(source) => return PostAction::Fuck(WhatError::Install { source }),
     };
     println!();
     if data.is_empty() {
@@ -76,19 +81,23 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
         );
         if states.get("yes").is_none_or(|x: &bool| !*x) {
             match choice("Continue?", true) {
-                Err(message) => return PostAction::Fuck(message),
+                Err(source) => {
+                    return PostAction::Fuck(WhatError::Install {
+                        source: WhereError::WrappedError { source },
+                    });
+                }
                 Ok(false) => {
-                    return PostAction::Fuck(snafu::FromString::without_source(String::from(
-                        "Aborted.",
-                    )));
+                    return PostAction::Fuck(WhatError::Install {
+                        source: WhereError::other("Aborted."),
+                    });
                 }
                 Ok(true) => (),
             };
         }
     }
     for data in data {
-        if let Err(fault) = data.install(&runtime) {
-            return PostAction::Fuck(fault);
+        if let Err(source) = data.install(&runtime) {
+            return PostAction::Fuck(WhatError::Install { source });
         }
     }
     PostAction::Return

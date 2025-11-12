@@ -38,5 +38,7 @@ statebox.workspace = true
 tokio.workspace = true
 utils.workspace = true
 
+[profile.dev]
+opt-level = 3
 # [env]
 # You can find some static variables in .cargo/config.toml

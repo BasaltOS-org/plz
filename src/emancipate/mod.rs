@@ -2,7 +2,10 @@ use commands::Command;
 use metadata::emancipate;
 use settings::acquire_lock;
 use statebox::StateBox;
-use utils::PostAction;
+use utils::{
+    PostAction,
+    errors::{WhatError, WhereError},
+};
 
 pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
@@ -20,7 +23,11 @@ pub fn build(hierarchy: &[String]) -> Command {
 fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
     match acquire_lock() {
         Ok(Some(action)) => return action,
-        Err(fault) => return PostAction::Fuck(fault),
+        Err(source) => {
+            return PostAction::Fuck(WhatError::Emancipate {
+                source: WhereError::WrappedError { source },
+            });
+        }
         _ => (),
     }
     let mut args = match args {
@@ -37,8 +44,8 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    if let Err(fault) = emancipate(&data) {
-        PostAction::Fuck(fault)
+    if let Err(source) = emancipate(&data) {
+        PostAction::Fuck(WhatError::Emancipate { source })
     } else {
         PostAction::Return
     }

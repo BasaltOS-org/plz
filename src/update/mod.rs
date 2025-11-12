@@ -1,9 +1,13 @@
 use commands::Command;
 use metadata::collect_updates;
 use settings::acquire_lock;
+use snafu::ResultExt;
 use statebox::StateBox;
 use tokio::runtime::Runtime;
-use utils::PostAction;
+use utils::{
+    FuckWrap, PostAction,
+    errors::{RuntimeSnafu, WhatError, WhereError},
+};
 
 pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
@@ -20,16 +24,19 @@ pub fn build(hierarchy: &[String]) -> Command {
 fn run(_states: &StateBox, _args: Option<&[String]>) -> PostAction {
     match acquire_lock() {
         Ok(Some(action)) => return action,
-        Err(fault) => return PostAction::Fuck(fault),
+        Err(source) => {
+            return PostAction::Fuck(WhatError::Update {
+                source: WhereError::WrappedError { source },
+            });
+        }
         _ => (),
     }
-    let Ok(runtime) = Runtime::new() else {
-        return PostAction::Fuck(snafu::FromString::without_source(String::from(
-            "Error creating runtime!",
-        )));
+    let runtime = match Runtime::new().context(RuntimeSnafu).wrap() {
+        Ok(runtime) => runtime,
+        Err(source) => return PostAction::Fuck(WhatError::Update { source }),
     };
-    if let Err(fault) = runtime.block_on(collect_updates()) {
-        PostAction::Fuck(fault)
+    if let Err(source) = runtime.block_on(collect_updates()) {
+        PostAction::Fuck(WhatError::Update { source })
     } else {
         PostAction::Return
     }

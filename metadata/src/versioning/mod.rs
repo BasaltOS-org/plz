@@ -6,11 +6,14 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use settings::{OriginKind, SettingsYaml};
-use snafu::{OptionExt, ResultExt, Whatever, whatever};
-use utils::{Range, VerReq, Version};
+use snafu::{OptionExt, ResultExt, location};
+use utils::{
+    Range, VerReq, Version,
+    errors::{HowError, IOAction, IOSnafu, SystemSnafu, WhereError, YAMLSnafu},
+};
 
 use crate::{
-    QueuedChanges, get_metadata_path,
+    FuckNest, FuckWrap, QueuedChanges, get_metadata_path,
     installed::{InstalledInstallKind, InstalledMetaData},
     processed::ProcessedMetaData,
 };
@@ -22,21 +25,21 @@ pub struct DepVer {
 }
 
 impl DepVer {
-    pub fn get_installed_specific(&self) -> Result<Specific, Whatever> {
-        let metadata = InstalledMetaData::open(&self.name)?;
+    pub fn get_installed_specific(&self) -> Result<Specific, WhereError> {
+        let metadata = InstalledMetaData::open(&self.name).nest("Locate Package Metadata")?;
         Ok(Specific {
             name: metadata.name,
-            version: Version::parse(&metadata.version)?,
+            version: Version::parse(&metadata.version).wrap()?,
         })
     }
     pub async fn pull_metadata(
         self,
         sources: Option<&[OriginKind]>,
         dependent: bool,
-    ) -> Result<ProcessedMetaData, Whatever> {
+    ) -> Result<ProcessedMetaData, WhereError> {
         let sources = match sources {
             Some(sources) => sources,
-            None => &SettingsYaml::get_settings()?.sources,
+            None => &SettingsYaml::get_settings().wrap()?.sources,
         };
         let mut versions = None;
         let mut g_source = None;
@@ -65,13 +68,15 @@ impl DepVer {
                     // thingy
                     println!("Github is not implemented yet!");
                 }
-                OriginKind::Apt(_) => {
-                    whatever!("DitherNude")
-                }
+                OriginKind::Apt(_) => return Err(WhereError::debug(location!())),
             }
         }
         let (Some(mut versions), Some(source)) = (versions, g_source) else {
-            whatever!("Failed to locate package `{name}`!")
+            return Err(HowError::SystemError {
+                message: "Discovery failed".into(),
+                package: name.into(),
+            })
+            .wrap();
         };
         match &self.range.lower {
             VerReq::Gt(gt) => versions.retain(|x| x > gt),
@@ -79,7 +84,11 @@ impl DepVer {
             VerReq::Eq(eq) => versions.retain(|x| x == eq),
             VerReq::NoBound => (),
             fuck => {
-                whatever!("Unexpected `lower` version requirement of {fuck:?} for `{name}`!")
+                return Err(HowError::SystemError {
+                    message: format!("Unexpected `lower` version requirement of {fuck:?}",).into(),
+                    package: name.into(),
+                })
+                .wrap();
             }
         };
         match &self.range.upper {
@@ -87,14 +96,24 @@ impl DepVer {
             VerReq::Lt(lt) => versions.retain(|x| x < lt),
             VerReq::Eq(_) | VerReq::NoBound => (),
             fuck => {
-                whatever!("Unexpected `upper` version requirement of {fuck:?} for `{name}`!");
+                return Err(HowError::SystemError {
+                    message: format!("Unexpected `upper` version requirement of {fuck:?}",).into(),
+                    package: name.into(),
+                })
+                .wrap();
             }
         };
         versions.sort();
-        let ver = versions.last().map(|x| x.to_string()).whatever_context("A guaranteed to be populated Vec was found to be empty. You should never see this error message.")?;
+        let Some(ver) = versions.last().map(|x| x.to_string()) else {
+            return Err(WhereError::debug(location!()));
+        };
         ProcessedMetaData::get_metadata(&name, Some(&ver), &[source], dependent)
             .await
-            .with_whatever_context(|| format!("Failed to locate package `{}` version {ver}!", name))
+            .context(SystemSnafu {
+                message: format!("Failed to locate version {ver}"),
+                package: name,
+            })
+            .wrap()
     }
 }
 
@@ -105,7 +124,7 @@ pub struct Specific {
 }
 
 impl Specific {
-    pub fn write_dependent(&self, their_name: &str, their_ver: &str) -> Result<(), Whatever> {
+    pub fn write_dependent(&self, their_name: &str, their_ver: &str) -> Result<(), WhereError> {
         let (path, data) = get_metadata_path(&self.name)?;
         if path.exists()
             && path.is_file()
@@ -114,7 +133,7 @@ impl Specific {
             if data.version == self.version.to_string() {
                 let their_dep = Self {
                     name: their_name.to_string(),
-                    version: Version::parse(their_ver)?,
+                    version: Version::parse(their_ver).wrap()?,
                 };
                 if let Some(found) = data
                     .dependents
@@ -129,46 +148,51 @@ impl Specific {
                     data.dependents.push(their_dep);
                 }
             }
-            let mut file = File::create(&path).with_whatever_context(|_| {
-                format!(
-                    "Failed to open dependency `{}`'s metadata as WO!",
-                    self.name
-                )
-            })?;
-            let data = serde_norway::to_string(&data).with_whatever_context(|_| {
-                format!(
-                    "Failed to parse dependency `{}`'s metadata to string!",
-                    self.name
-                )
-            })?;
-            file.write_all(data.as_bytes()).with_whatever_context(|_| {
-                format!(
-                    "Failed to write to dependency `{}`'s metadata file!",
-                    self.name
-                )
-            })
+            let mut file = File::create(&path)
+                .context(IOSnafu {
+                    action: IOAction::CreateFile,
+                    loc: path.display().to_string(),
+                })
+                .wrap()?;
+            let data = serde_norway::to_string(&data)
+                .context(YAMLSnafu {
+                    loc: data.name.to_string(),
+                })
+                .wrap()?;
+            file.write_all(data.as_bytes())
+                .context(IOSnafu {
+                    action: IOAction::WriteFile,
+                    loc: path.display().to_string(),
+                })
+                .wrap()
         } else {
-            whatever!("Cannot find data for dependency `{}`!", self.name)
+            Err(HowError::SystemError {
+                message: format!("Failed to find data for dependency `{}`", self.name).into(),
+                package: their_name.to_string().into(),
+            })
+            .wrap()
         }
     }
-    pub fn get_dependents(&self, queued: &mut QueuedChanges) -> Result<(), Whatever> {
-        let data = InstalledMetaData::open(&self.name)?;
+    pub fn get_dependents(&self, queued: &mut QueuedChanges) -> Result<(), WhereError> {
+        let data = InstalledMetaData::open(&self.name).nest("Locate Package Metadata")?;
         if data.version == self.version.to_string() {
             for dependent in &data.dependents {
                 if queued.insert_primary(dependent.clone()) {
-                    dependent.get_dependents(queued)?;
+                    dependent
+                        .get_dependents(queued)
+                        .nest("Get Package Dependents")?;
                 }
             }
             Ok(())
         } else {
-            whatever!(
-                "`{}` didn't contain version {}!",
-                self.name,
-                self.version.to_string()
-            )
+            Err(HowError::SystemError {
+                message: format!("Version {} not found", self.version).into(),
+                package: self.name.to_string().into(),
+            })
+            .wrap()
         }
     }
-    pub fn remove(&self, purge: bool) -> Result<(), Whatever> {
+    pub fn remove(&self, purge: bool) -> Result<(), WhereError> {
         let msg = if purge { "Purging" } else { "Removing" };
         println!("{} {} version {}...", msg, self.name, self.version);
         let (path, data) = get_metadata_path(&self.name)?;
@@ -188,32 +212,42 @@ impl Specific {
             .flat_map(|x| x.get_installed_specific())
             .collect::<Vec<Specific>>()
         {
-            data.clear_dependencies(dep)?;
-            dep.remove(purge)?;
+            data.clear_dependencies(dep)
+                .nest("Remove Dependency from Package")?;
+            dep.remove(purge).nest("Remove/Purge Package")?;
         }
         match data.install_kind {
             InstalledInstallKind::PreBuilt(_) => {
-                whatever!("PreBuilt is not implemented yet!") //thingy
+                return Err(WhereError::debug(location!())); //thingy
             }
             InstalledInstallKind::Compilable(compilable) => {
                 // I'm not sure if the `purge` script is run IN PLACE OF, or
                 // AFTER the `uninstall` script. This is due to change.
                 let (script, msg) = if purge {
-                    (compilable.purge, "purge")
+                    (compilable.purge, "Purge")
                 } else {
-                    (compilable.uninstall, "remove")
+                    (compilable.uninstall, "Removal")
                 };
                 let mut command = Command::new("/usr/bin/bash");
-                command
+                if !command
                     .arg("-c")
                     .arg(script)
                     .status()
-                    .with_whatever_context(|_| {
-                        format!("Failed to {msg} package `{}`!", self.name)
-                    })?;
+                    .is_ok_and(|x| x.code() == Some(0))
+                {
+                    return Err(HowError::SystemError {
+                        message: format!("{msg} failed").into(),
+                        package: self.name.to_string().into(),
+                    })
+                    .wrap()?;
+                }
             }
         }
-        fs::remove_file(path)
-            .with_whatever_context(|_| format!("Failed to remove `{}`!", &self.name))
+        fs::remove_file(&path)
+            .context(IOSnafu {
+                action: IOAction::RemoveFile,
+                loc: path.display().to_string(),
+            })
+            .wrap()
     }
 }

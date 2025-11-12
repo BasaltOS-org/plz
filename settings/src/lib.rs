@@ -1,14 +1,18 @@
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     path::PathBuf,
     thread::sleep,
     time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
-use snafu::{ResultExt, Whatever, whatever};
-use utils::{PostAction, get_dir, is_root};
+use snafu::ResultExt;
+use utils::{
+    PostAction,
+    errors::{HowError, IOAction, IOSnafu, YAMLSnafu},
+    get_dir, is_root,
+};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct SettingsYaml {
@@ -61,21 +65,30 @@ impl SettingsYaml {
             sources: Vec::new(),
         }
     }
-    pub fn set_settings(self) -> Result<(), Whatever> {
-        let mut file =
-            File::create(affirm_path()?).whatever_context("Failed to open SettingsYaml as WO!")?;
-        let settings = serde_norway::to_string(&self)
-            .whatever_context("Failed to parse SettingsYaml to string!")?;
-        file.write_all(settings.as_bytes())
-            .whatever_context("Failed to write to file!")
+    pub fn set_settings(self) -> Result<(), HowError> {
+        let loc = "SettingsYAML";
+        let mut file = File::create(affirm_path()?).context(IOSnafu {
+            action: IOAction::CreateFile,
+            loc,
+        })?;
+        let settings = serde_norway::to_string(&self).context(YAMLSnafu { loc })?;
+        file.write_all(settings.as_bytes()).context(IOSnafu {
+            action: IOAction::WriteFile,
+            loc,
+        })
     }
-    pub fn get_settings() -> Result<Self, Whatever> {
-        let mut file =
-            File::open(affirm_path()?).whatever_context("Failed to open SettingsYaml as RO!")?;
+    pub fn get_settings() -> Result<Self, HowError> {
+        let loc = "SettingsYAML";
+        let mut file = File::open(affirm_path()?).context(IOSnafu {
+            action: IOAction::OpenFile,
+            loc,
+        })?;
         let mut sources = String::new();
-        file.read_to_string(&mut sources)
-            .whatever_context("Failed to read file!")?;
-        serde_norway::from_str(&sources).whatever_context("Failed to parse data into SettingsYaml!")
+        file.read_to_string(&mut sources).context(IOSnafu {
+            action: IOAction::ReadFile,
+            loc,
+        })?;
+        serde_norway::from_str(&sources).context(YAMLSnafu { loc: "YAML" })
     }
 }
 
@@ -104,40 +117,49 @@ pub enum Arch {
 }
 
 impl Arch {
-    pub fn is_compatible(&self, name: &str) -> Result<bool, Whatever> {
+    pub fn is_compatible(&self, name: &str) -> Result<bool, HowError> {
         let installed = SettingsYaml::get_settings()?.arch;
         match self {
             Self::Any => Ok(true),
             Self::X86_64v1 => Ok([Self::X86_64v1, Self::X86_64v3].contains(&installed)),
-            Self::NoArch => {
-                whatever!("The requested package `{name}` is of an unrecognized architecture!")
-            }
+            Self::NoArch => Err(HowError::SystemError {
+                message: "Unrecognized architecture".into(),
+                package: name.to_string().into(),
+            }),
             other => Ok(installed == *other),
         }
     }
 }
 
-fn affirm_path() -> Result<PathBuf, Whatever> {
+fn affirm_path() -> Result<PathBuf, HowError> {
     let mut path = get_dir()?;
     path.push("settings.yaml");
     if !path.exists() {
-        let mut file = File::create(&path).whatever_context("Failed to create settings file!")?;
-        if let Ok(new_settings) = serde_norway::to_string(&SettingsYaml::new()) {
-            file.write_all(new_settings.as_bytes())
-                .whatever_context("Failed to write to file!")?;
-            Ok(path)
-        } else {
-            whatever!("Failed to serialize settings!")
-        }
+        let mut file = File::create(&path).context(IOSnafu {
+            action: IOAction::CreateFile,
+            loc: "SettingsYAML",
+        })?;
+        let new_settings = serde_norway::to_string(&SettingsYaml::new()).context(YAMLSnafu {
+            loc: "SettingsYAML",
+        })?;
+
+        file.write_all(new_settings.as_bytes()).context(IOSnafu {
+            action: IOAction::WriteFile,
+            loc: "SettingsYAML",
+        })?;
+        Ok(path)
     } else if path.is_file() {
-        File::open(&path).whatever_context("Failed to read settings file!")?;
         Ok(path)
     } else {
-        whatever!("Settings file is of unexpected type!")
+        Err(HowError::IOError {
+            source: ErrorKind::NotSeekable.into(),
+            action: IOAction::AssertPath,
+            loc: path.display().to_string().into(),
+        })
     }
 }
 
-pub fn acquire_lock() -> Result<Option<PostAction>, Whatever> {
+pub fn acquire_lock() -> Result<Option<PostAction>, HowError> {
     if !is_root() {
         return Ok(Some(PostAction::Elevate));
     }
@@ -198,8 +220,12 @@ pub fn acquire_lock() -> Result<Option<PostAction>, Whatever> {
     Ok(None)
 }
 
-pub fn remove_lock() -> Result<(), Whatever> {
+pub fn remove_lock() -> Result<(), HowError> {
     let mut settings = SettingsYaml::get_settings()?;
     settings.locked = false;
     settings.set_settings()
+}
+
+pub trait FuckExt<T, E>: Sized {
+    fn wrap<E2: From<HowError>>(self, loc: &'static str) -> Result<T, E2>;
 }

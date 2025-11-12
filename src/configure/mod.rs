@@ -1,9 +1,8 @@
 use commands::Command;
 use flags::Flag;
 use settings::{SettingsYaml, acquire_lock, remove_lock};
-use snafu::{OptionExt, Whatever, whatever};
 use statebox::StateBox;
-use utils::{PostAction, choice};
+use utils::{FuckWrap, PostAction, choice, errors::WhereError};
 
 pub fn build(hierarchy: &[String]) -> Command {
     let setting = Flag::new(
@@ -56,11 +55,16 @@ fn set_func(
     states: &mut StateBox,
     arg: Option<String>,
     mut settings: SettingsYaml,
-) -> Result<(), Whatever> {
-    let arg = arg.whatever_context("Missing an argument!")?;
-    let (key, value) = arg
-        .split_once('=')
-        .whatever_context("Invalid syntax. please use `--set \"key=value\"`.")?;
+) -> Result<(), WhereError> {
+    // let arg = arg.whatever_context("Missing an argument!")?;
+    let Some(arg) = arg else {
+        return Err(WhereError::other("Missing an argument!"));
+    };
+    let Some((key, value)) = arg.split_once('=') else {
+        return Err(WhereError::other(
+            "Invalid syntax. please use `--set \"key=value\"`.",
+        ));
+    };
     match key {
         "exec" => {
             let val = if value.is_empty() {
@@ -74,15 +78,15 @@ fn set_func(
             );
             if states.get("yes").is_none_or(|x: &bool| !*x) {
                 match choice("Proceed?", true) {
-                    Err(message) => whatever!("{message}"),
-                    Ok(false) => whatever!("Abort."),
+                    Err(message) => return Err(WhereError::other(message.to_string())),
+                    Ok(false) => return Err(WhereError::other("Abort.")),
                     Ok(true) => (),
                 }
             }
             settings.exec = val;
         }
-        _ => whatever!("Unrecognized key {key}!"),
+        _ => return Err(WhereError::other("Unrecognized key {key}!")),
     }
-    settings.set_settings()?;
+    settings.set_settings().wrap()?;
     Ok(())
 }
