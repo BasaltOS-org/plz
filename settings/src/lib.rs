@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     fs::File,
     io::{ErrorKind, Read, Write},
     path::PathBuf,
@@ -100,9 +101,37 @@ impl Default for SettingsYaml {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum OriginKind {
-    Apt(String),
+    Apt {
+        source: String,
+        code: String,
+        kind: AptKind,
+    },
     Pax(String),
-    Github { user: String, repo: String },
+    Github {
+        user: String,
+        repo: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub enum AptKind {
+    Custom(String),
+    Main,
+    Multiverse,
+    Restricted,
+    Universe,
+}
+
+impl Display for AptKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Custom(c) => c,
+            Self::Main => "main",
+            Self::Multiverse => "multiverse",
+            Self::Restricted => "restricted",
+            Self::Universe => "universe",
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]

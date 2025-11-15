@@ -64,11 +64,11 @@ impl DepVer {
                         break;
                     }
                 }
-                OriginKind::Github { user: _, repo: _ } => {
+                OriginKind::Github { .. } => {
                     // thingy
                     println!("Github is not implemented yet!");
                 }
-                OriginKind::Apt(_) => return Err(WhereError::debug(location!())),
+                OriginKind::Apt { .. } => return Err(WhereError::debug(location!())),
             }
         }
         let (Some(mut versions), Some(source)) = (versions, g_source) else {

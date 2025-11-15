@@ -27,19 +27,7 @@ pub struct Command {
 
 impl PartialEq for Command {
     // Superfluous PartialEq implementation to allow for struct field equality checks.
-    fn eq(
-        &self,
-        Command {
-            name: _,
-            aliases: _,
-            about: _,
-            flags: _,
-            subcommands: _,
-            states: _,
-            run_func: _,
-            hierarchy: _,
-        }: &Self,
-    ) -> bool {
+    fn eq(&self, _: &Self) -> bool {
         false
     }
 }

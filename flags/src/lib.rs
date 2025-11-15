@@ -11,17 +11,7 @@ pub struct Flag {
 
 impl PartialEq for Flag {
     // Superfluous PartialEq implementation to allow for struct field equality checks.
-    fn eq(
-        &self,
-        Flag {
-            short: _,
-            long: _,
-            about: _,
-            consumer: _,
-            breakpoint: _,
-            run_func: _,
-        }: &Self,
-    ) -> bool {
+    fn eq(&self, _: &Self) -> bool {
         false
     }
 }

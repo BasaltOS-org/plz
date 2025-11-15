@@ -9,7 +9,7 @@ use debian_control::{
     lossless::{Control, Relations},
 };
 use lazy_regex::regex_captures_iter;
-use settings::Arch;
+use settings::{AptKind, Arch};
 use snafu::{OptionExt, ResultExt};
 use utils::{
     Range, VerReq, Version,
@@ -27,7 +27,9 @@ use crate::{
 pub struct RawApt {}
 impl RawApt {
     pub async fn get_vers(
-        mirror: &str,
+        source: &str,
+        _code: &str,
+        kind: &str,
         prefer: Option<&str>,
         name: &str,
     ) -> HashSet<(String, Version, Arch)> {
@@ -41,8 +43,8 @@ impl RawApt {
         } else {
             return vers;
         };
-        let endpoint = format!("{mirror}/{folder}/{name}");
-        let Ok(response) = reqwest::get(endpoint).await else {
+        let endpoint = format!("{source}/pool/{kind}/{folder}/{name}");
+        let Ok(response) = reqwest::get(dbg!(endpoint)).await else {
             return vers;
         };
         let Ok(mut body) = response.text().await else {
@@ -75,7 +77,9 @@ impl RawApt {
             .collect::<HashSet<(String, Version, Arch)>>()
     }
     pub async fn parse(
-        mirror: &str,
+        source: &str,
+        code: &str,
+        kind: &AptKind,
         name: &str,
         version: &str,
         dependent: bool,
@@ -91,7 +95,7 @@ impl RawApt {
             })
             .wrap();
         };
-        let origin = format!("{mirror}/{folder}/{name}");
+        let origin = format!("{source}/pool/{kind}/{folder}/{name}");
         let endpoint = format!("{origin}/{version}.deb");
         let response = reqwest::get(&endpoint)
             .await
@@ -206,7 +210,7 @@ impl RawApt {
             })
             .wrap();
         }
-        Self::to_processed(&binary, version, &origin, dependent)
+        Self::to_processed(&binary, version, source, code, kind, dependent)
             .context(SystemSnafu {
                 message: "Invalid control file",
                 package: name.to_string(),
@@ -216,7 +220,10 @@ impl RawApt {
     pub fn to_processed(
         binary: &Binary,
         version: &str,
-        origin: &str,
+        // origin: &str,
+        source: &str,
+        code: &str,
+        kind: &AptKind,
         dependent: bool,
     ) -> Option<ProcessedMetaData> {
         let package = binary.name()?;
@@ -242,7 +249,11 @@ impl RawApt {
             kind: super::MetaDataKind::Apt,
             description,
             version: version.to_string(),
-            origin: settings::OriginKind::Apt(origin.to_string()),
+            origin: settings::OriginKind::Apt {
+                source: source.to_string(),
+                code: code.to_string(),
+                kind: kind.clone(),
+            },
             dependent,
             build_dependencies: Vec::new(),
             runtime_dependencies: deps,

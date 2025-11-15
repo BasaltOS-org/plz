@@ -112,11 +112,11 @@ impl ProcessedMetaData {
             .wrap()?;
         let endpoint = match self.origin {
             OriginKind::Pax(pax) => format!("{pax}?v={}", self.version),
-            OriginKind::Github { user: _, repo: _ } => {
+            OriginKind::Github { .. } => {
                 return Err(WhereError::debug(location!()));
                 // thingy
             }
-            OriginKind::Apt(_) => return Err(WhereError::debug(location!())),
+            OriginKind::Apt { .. } => return Err(WhereError::debug(location!())),
         };
         let response = reqwest::get(&endpoint)
             .await
@@ -258,12 +258,12 @@ impl ProcessedMetaData {
                     // }
                     // };
                 }
-                OriginKind::Github { user: _, repo: _ } => {
+                OriginKind::Github { .. } => {
                     // thingy
                     println!("Github is not implemented yet!");
                 }
-                OriginKind::Apt(apt) => {
-                    let vers = RawApt::get_vers(apt, None, name).await;
+                OriginKind::Apt { source, code, kind } => {
+                    let vers = RawApt::get_vers(source, code, &kind.to_string(), None, name).await;
                     let Some(ver) = (if let Some(version) = version {
                         vers.into_iter().find(|x| x.1.to_string() == version)
                     } else {
@@ -273,13 +273,14 @@ impl ProcessedMetaData {
                     }) else {
                         continue;
                     };
-                    let processed = match RawApt::parse(apt, name, &ver.0, dependent).await {
-                        Ok(data) => dbg!(data),
-                        Err(fault) => {
-                            println!("{fault}");
-                            return None;
-                        }
-                    };
+                    let processed =
+                        match RawApt::parse(source, code, kind, name, &ver.0, dependent).await {
+                            Ok(data) => dbg!(data),
+                            Err(fault) => {
+                                println!("{fault}");
+                                return None;
+                            }
+                        };
                     metadata = Some(processed);
                     break;
                 }
