@@ -1,6 +1,6 @@
 use commands::Command;
 use metadata::get_packages;
-use settings::{SettingsYaml, acquire_lock};
+use settings::{SettingsJson, acquire_lock};
 use snafu::ResultExt;
 use statebox::StateBox;
 use tokio::runtime::Runtime;
@@ -36,7 +36,7 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
         Some(args) => args.iter(),
     };
     print!("Reading sources...");
-    let sources = match SettingsYaml::get_settings() {
+    let sources = match SettingsJson::get_settings() {
         Ok(settings) => settings.sources,
         Err(_) => return PostAction::PullSources,
     };
@@ -96,7 +96,7 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
         }
     }
     for data in data {
-        if let Err(source) = data.install(&runtime) {
+        if let Err(source) = runtime.block_on(data.install()) {
             return PostAction::Fuck(WhatError::Install { source });
         }
     }

@@ -1,10 +1,12 @@
 use commands::Command;
 use metadata::emancipate;
 use settings::acquire_lock;
+use snafu::ResultExt;
 use statebox::StateBox;
+use tokio::runtime::Runtime;
 use utils::{
-    PostAction,
-    errors::{WhatError, WhereError},
+    FuckWrap, PostAction,
+    errors::{RuntimeSnafu, WhatError, WhereError},
 };
 
 pub fn build(hierarchy: &[String]) -> Command {
@@ -44,7 +46,11 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    if let Err(source) = emancipate(&data) {
+    let runtime = match Runtime::new().context(RuntimeSnafu).wrap() {
+        Ok(runtime) => runtime,
+        Err(source) => return PostAction::Fuck(WhatError::Install { source }),
+    };
+    if let Err(source) = runtime.block_on(emancipate(&data)) {
         PostAction::Fuck(WhatError::Emancipate { source })
     } else {
         PostAction::Return

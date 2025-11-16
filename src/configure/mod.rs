@@ -1,6 +1,6 @@
 use commands::Command;
 use flags::Flag;
-use settings::{SettingsYaml, acquire_lock, remove_lock};
+use settings::{SettingsJson, acquire_lock, remove_lock};
 use statebox::StateBox;
 use utils::{FuckWrap, PostAction, choice, errors::WhereError};
 
@@ -8,7 +8,7 @@ pub fn build(hierarchy: &[String]) -> Command {
     let setting = Flag::new(
         Some('s'),
         "set",
-        "Command to set options in the SettingsYAML file.",
+        "Command to set options in the SettingsJSON file.",
         true,
         true,
         set_handle,
@@ -36,7 +36,7 @@ fn set_handle(states: &mut StateBox, arg: Option<String>) {
         }
         _ => (),
     };
-    let settings = match SettingsYaml::get_settings() {
+    let settings = match SettingsJson::get_settings() {
         Ok(settings) => settings,
         Err(fault) => {
             println!("{fault}");
@@ -54,7 +54,7 @@ fn set_handle(states: &mut StateBox, arg: Option<String>) {
 fn set_func(
     states: &mut StateBox,
     arg: Option<String>,
-    mut settings: SettingsYaml,
+    mut settings: SettingsJson,
 ) -> Result<(), WhereError> {
     // let arg = arg.whatever_context("Missing an argument!")?;
     let Some(arg) = arg else {

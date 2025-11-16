@@ -1,10 +1,12 @@
 use commands::Command;
 use metadata::{upgrade_all, upgrade_only, upgrade_packages};
 use settings::acquire_lock;
+use snafu::ResultExt;
 use statebox::StateBox;
+use tokio::runtime::Runtime;
 use utils::{
-    PostAction, choice,
-    errors::{WhatError, WhereError},
+    FuckWrap, PostAction, choice,
+    errors::{RuntimeSnafu, WhatError, WhereError},
 };
 
 pub fn build(hierarchy: &[String]) -> Command {
@@ -78,7 +80,11 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
             Ok(true) => (),
         };
     }
-    if let Err(fault) = upgrade_packages(&data) {
+    let runtime = match Runtime::new().context(RuntimeSnafu).wrap() {
+        Ok(runtime) => runtime,
+        Err(source) => return PostAction::Fuck(WhatError::Install { source }),
+    };
+    if let Err(fault) = runtime.block_on(upgrade_packages(&data)) {
         return PostAction::Fuck(WhatError::Upgrade { source: fault });
     }
     PostAction::Return

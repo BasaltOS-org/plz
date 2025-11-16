@@ -1,12 +1,17 @@
-use std::{cmp::Ordering, fs::DirBuilder, io::Write, path::PathBuf, process::Command};
+use std::{
+    cmp::Ordering, fmt::Display, fs::DirBuilder, io::Write, path::PathBuf, process::Command,
+    str::FromStr,
+};
 
 use flags::Flag;
 use nix::unistd;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
+use sqlx::{SqlitePool, query, sqlite::SqliteConnectOptions};
 
 use crate::errors::{
-    HowError, IOAction, IOSnafu, NestedSnafu, WhatError, WhereError, WrappedSnafu,
+    HowError, IOAction, IOSnafu, NestedSnafu, Parsers, SQLSnafu, WhatError, WhereError,
+    WrappedSnafu,
 };
 
 pub mod errors;
@@ -142,6 +147,39 @@ pub fn command(name: &str, args: &[&str], pwd: Option<&str>) -> Option<i32> {
     command.status().map(|x| x.code()).ok().flatten()
 }
 
+pub async fn get_pool() -> Result<SqlitePool, HowError> {
+    let path = PathBuf::from("/etc/pax/data.db");
+    let options = SqliteConnectOptions::from_str(&path.to_string_lossy())
+        .context(SQLSnafu)?
+        .create_if_missing(true);
+    let db = SqlitePool::connect_with(options).await.context(SQLSnafu)?;
+    // if path.exists() {
+    //     Ok(db)
+    // } else {
+    //     File::create(&path).context(IOSnafu {
+    //         action: IOAction::CreateFile,
+    //         loc: path.display().to_string(),
+    //     })?;
+    query(
+        r"CREATE TABLE IF NOT EXISTS installed (name TEXT, kind TEXT,
+        version TEXT, origin BLOB, dependent INTEGER, dependencies BLOB,
+        dependents BLOB, install_kind BLOB, hash TEXT)",
+    )
+    .execute(&db)
+    .await
+    .context(SQLSnafu)?;
+    query(
+        r"CREATE TABLE IF NOT EXISTS updates (name TEXT, kind TEXT,
+        description TEXT, version TEXT, origin BLOB, dependent INTEGER,
+        built_dependencies BLOB, runtime_dependents BLOB, install_kind BLOB, hash TEXT)",
+    )
+    .execute(&db)
+    .await
+    .context(SQLSnafu)?;
+    Ok(db)
+    // }
+}
+
 pub trait FuckWrap<T, E>: Sized {
     fn wrap<E2: From<WhereError>>(self) -> Result<T, E2>;
 }
@@ -204,7 +242,7 @@ impl Version {
                                 if split.len() > 3 {
                                     Err(HowError::ParseError {
                                         message: "Two many segments in version!".into(),
-                                        util: errors::Parsers::Version,
+                                        util: Parsers::Version,
                                     })
                                 } else {
                                     Ok(Self {
@@ -222,7 +260,7 @@ impl Version {
                                         split[1]
                                     )
                                     .into(),
-                                    util: errors::Parsers::Version,
+                                    util: Parsers::Version,
                                 })
                             }
                         } else {
@@ -238,7 +276,7 @@ impl Version {
                         Err(HowError::ParseError {
                             message: format!("Expected minor to be a number, got `{}`!", split[1])
                                 .into(),
-                            util: errors::Parsers::Version,
+                            util: Parsers::Version,
                         })
                     }
                 } else {
@@ -253,13 +291,13 @@ impl Version {
             } else {
                 Err(HowError::ParseError {
                     message: format!("Expected major to be a number, got `{}`!", split[0]).into(),
-                    util: errors::Parsers::Version,
+                    util: Parsers::Version,
                 })
             }
         } else {
             Err(HowError::ParseError {
                 message: "A version must be specified!".into(),
-                util: errors::Parsers::Version,
+                util: Parsers::Version,
             })
         }
     }
@@ -474,6 +512,44 @@ impl VerReq {
             None
         }
     }
+    fn parse(input: &str) -> Result<Self, HowError> {
+        let mut chars = input.chars();
+        let kind = chars.next().ok_or(HowError::ParseError {
+            message: "Missing type identifier!".into(),
+            util: Parsers::VerReq,
+        })?;
+        let data = chars.collect::<String>();
+        match kind as u8 {
+            0 => Ok(Self::NoBound),
+            kind => {
+                let version = Version::parse(&data)?;
+                match kind {
+                    1 => Ok(Self::Gt(version)),
+                    2 => Ok(Self::Ge(version)),
+                    3 => Ok(Self::Eq(version)),
+                    4 => Ok(Self::Le(version)),
+                    5 => Ok(Self::Lt(version)),
+                    kind => Err(HowError::ParseError {
+                        message: format!("Invalid kind identifier `{kind}`!").into(),
+                        util: Parsers::VerReq,
+                    }),
+                }
+            }
+        }
+    }
+}
+
+impl Display for VerReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&match self {
+            Self::Gt(gt) => format!("\x01{gt}"),
+            Self::Ge(ge) => format!("\x02{ge}"),
+            Self::Eq(eq) => format!("\x03{eq}"),
+            Self::Le(le) => format!("\x04{le}"),
+            Self::Lt(lt) => format!("\x05{lt}"),
+            Self::NoBound => String::from("\x00"),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -509,5 +585,20 @@ impl Range {
     }
     pub fn negotiate(&self, prior: Option<Self>) -> Option<Self> {
         self.upper.negotiate(self.lower.negotiate(prior))
+    }
+    pub fn parse(input: &str) -> Result<Self, HowError> {
+        let (lower, upper) = input.split_once(' ').ok_or(HowError::ParseError {
+            message: "Missing Range field `upper`!".into(),
+            util: Parsers::Range,
+        })?;
+        let lower = VerReq::parse(lower)?;
+        let upper = VerReq::parse(upper)?;
+        Ok(Self { lower, upper })
+    }
+}
+
+impl Display for Range {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("{} {}", self.lower, self.upper))
     }
 }

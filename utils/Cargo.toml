@@ -1,6 +1,6 @@
 [package]
 name = "utils"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
@@ -8,6 +8,7 @@ flags.workspace = true
 nix.workspace = true
 reqwest.workspace = true
 serde.workspace = true
-serde_norway.workspace = true
+serde_json.workspace = true
 snafu.workspace = true
+sqlx.workspace = true
 tokio.workspace = true

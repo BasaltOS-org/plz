@@ -2,4 +2,4 @@
 test-statebox = "test --doc --package statebox"
 
 [env]
-SETTINGS_YAML_VERSION = "0.1.0"
+SETTINGS_JSON_VERSION = "0.1.0"

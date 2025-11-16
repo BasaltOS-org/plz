@@ -1,15 +1,16 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt::Display};
 
 use serde::{Deserialize, Serialize};
 use settings::OriginKind;
 use snafu::OptionExt;
+use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type};
 use utils::{
     Range, VerReq, Version, command,
-    errors::{SystemSnafu, WhereError},
+    errors::{HowError, Parsers, SystemSnafu, WhereError},
 };
 
 use crate::{
-    DepVer, FuckNest, FuckWrap, InstallPackage, Specific, get_metadata_path,
+    DepVer, FuckNest, FuckWrap, InstallPackage, Specific, get_installed_metadata,
     processed::ProcessedMetaData,
 };
 
@@ -52,15 +53,16 @@ impl DependKind {
         }
     }
     pub async fn batch_as_installed(
-        deps: &[Self],
+        deps: &DependKindVec,
         sources: &[OriginKind],
         prior: &mut HashSet<Specific>,
+        pool: &SqlitePool,
     ) -> Result<Vec<InstallPackage>, WhereError> {
         let mut result = Vec::new();
-        for dep in deps {
+        for dep in deps.0.iter() {
             let dep = match dep {
                 Self::Latest(latest) => {
-                    ProcessedMetaData::get_metadata(latest, None, sources, true)
+                    ProcessedMetaData::get_metadata(latest, None, sources, true, pool)
                         .await
                         .context(SystemSnafu {
                             message: "Discovery failed",
@@ -71,14 +73,15 @@ impl DependKind {
                 Self::Specific(dep_ver) => {
                     let specific = dep_ver
                         .clone()
-                        .pull_metadata(Some(sources), true)
+                        .pull_metadata(Some(sources), true, pool)
                         .await
-                        .nest("Locate Package Metadata")?;
+                        .nest("Pull Package Metadata")?;
                     ProcessedMetaData::get_metadata(
                         &specific.name,
                         Some(&specific.version.to_string()),
                         sources,
                         true,
+                        pool,
                     )
                     .await
                     .context(SystemSnafu {
@@ -92,7 +95,7 @@ impl DependKind {
                     if result.is_some_and(|x| x == 0) {
                         continue;
                     } else {
-                        ProcessedMetaData::get_metadata(volatile, None, sources, true)
+                        ProcessedMetaData::get_metadata(volatile, None, sources, true, pool)
                             .await
                             .context(SystemSnafu {
                                 message: "Volatile discovery failed",
@@ -108,7 +111,7 @@ impl DependKind {
             };
             if !prior.contains(&specific) {
                 prior.insert(specific);
-                let child = Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior))
+                let child = Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior, pool))
                     .await
                     .nest("Get Package Dependencies")?;
                 result.push(child);
@@ -145,10 +148,13 @@ impl DependKind {
         }
         Some(collapsed)
     }
-    pub fn choose<T: IntoIterator<Item = Self>>(choices: T) -> Option<Self> {
+    pub async fn choose<T: IntoIterator<Item = Self>>(
+        choices: T,
+        pool: &SqlitePool,
+    ) -> Option<Self> {
         let mut first = None;
         for choice in choices {
-            if choice.is_installed() {
+            if choice.is_installed(pool).await {
                 return None;
             } else if first.is_none() {
                 first = Some(choice);
@@ -156,15 +162,15 @@ impl DependKind {
         }
         first
     }
-    fn is_installed(&self) -> bool {
+    async fn is_installed(&self, pool: &SqlitePool) -> bool {
         match self {
-            Self::Latest(latest) => match get_metadata_path(latest) {
-                Ok(data) => data.1.is_some(),
+            Self::Latest(latest) => match get_installed_metadata(latest, pool).await {
+                Ok(data) => data.is_some(),
                 Err(_) => false,
             },
-            Self::Specific(specific) => match get_metadata_path(&specific.name) {
+            Self::Specific(specific) => match get_installed_metadata(&specific.name, pool).await {
                 Ok(data) => {
-                    if let Some(data) = data.1 {
+                    if let Some(data) = data {
                         let prior = Version::parse(&data.version).ok().map(|x| {
                             let ver_req = VerReq::Eq(x);
                             Range {
@@ -184,8 +190,8 @@ impl DependKind {
                 if result.is_some_and(|x| x == 0) {
                     true
                 } else {
-                    match get_metadata_path(volatile) {
-                        Ok(value) => value.1.is_some(),
+                    match get_installed_metadata(volatile, pool).await {
+                        Ok(value) => value.is_some(),
                         Err(_) => false,
                     }
                 }
@@ -198,5 +204,94 @@ impl DependKind {
             Self::Specific(specific) => specific.name.to_string(),
             Self::Volatile(volatile) => volatile.to_string(),
         }
+    }
+    fn parse(input: &str) -> Result<Self, HowError> {
+        let mut chars = input.chars();
+        let kind = chars.next().ok_or(HowError::ParseError {
+            message: "Missing type identifier!".into(),
+            util: Parsers::DependKind,
+        })?;
+        let data = chars.collect::<String>();
+        match kind as u8 {
+            1 => Ok(Self::Latest(data)),
+            2 => Ok(Self::Specific(DepVer::parse(&data)?)),
+            3 => Ok(Self::Volatile(data)),
+            kind => Err(HowError::ParseError {
+                message: format!("Invalid kind identifier `{kind}`!").into(),
+                util: Parsers::DependKind,
+            }),
+        }
+    }
+}
+
+impl Display for DependKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&match self {
+            Self::Latest(latest) => format!("\x01{latest}"),
+            Self::Specific(specific) => format!("\x02{specific}"),
+            Self::Volatile(volatile) => format!("\x03{volatile}"),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct DependKindVec(pub Vec<DependKind>);
+
+impl DependKindVec {
+    fn parse(input: &str) -> Result<Self, HowError> {
+        if input.is_empty() {
+            return Ok(Self(Vec::new()));
+        }
+        let mut vers = Vec::new();
+        for ver in input.split('\x00') {
+            vers.push(DependKind::parse(ver)?);
+        }
+        Ok(Self(vers))
+    }
+}
+
+impl Display for DependKindVec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let data = self.0.iter().fold(String::new(), |mut acc, x| {
+            if !acc.is_empty() {
+                acc.push('\x00');
+            }
+            acc.push_str(&x.to_string());
+            acc
+        });
+        f.write_str(&data)
+    }
+}
+
+impl Type<Sqlite> for DependKindVec {
+    fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
+        <String as Type<Sqlite>>::type_info()
+    }
+}
+
+impl<'a> Encode<'a, Sqlite> for DependKindVec {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'a>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <String as Encode<'_, Sqlite>>::encode_by_ref(&self.to_string(), buf)
+    }
+    fn encode(
+        self,
+        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'a>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
+    where
+        Self: Sized,
+    {
+        <String as Encode<'_, Sqlite>>::encode(self.to_string(), buf)
+    }
+}
+
+impl<'a> Decode<'a, Sqlite> for DependKindVec {
+    fn decode(
+        value: <Sqlite as sqlx::Database>::ValueRef<'a>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
+        let data: String = Decode::<Sqlite>::decode(value)?;
+        Ok(Self::parse(&data)?)
     }
 }

@@ -1,7 +1,7 @@
 use commands::Command;
 use flags::Flag;
 use settings::OriginKind;
-use settings::SettingsYaml;
+use settings::SettingsJson;
 use settings::acquire_lock;
 use snafu::ResultExt;
 use statebox::StateBox;
@@ -76,7 +76,7 @@ async fn gen_sources() -> Result<(), HowError> {
     let url = "https://raw.githubusercontent.com/oreonproject/pax-rs/refs/heads/main/endpoints.txt";
     let sources = reqwest::get(url).await.context(NetSnafu { loc: url })?;
     let sources = sources.text().await.context(NetSnafu { loc: url })?;
-    let mut settings = SettingsYaml::get_settings()?;
+    let mut settings = SettingsJson::get_settings()?;
     for source in sources.trim().split('\n') {
         // thingy; make this actually detect the source type
         let source = OriginKind::Pax(source.to_string());

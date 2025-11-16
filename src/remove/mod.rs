@@ -1,5 +1,5 @@
 use commands::Command;
-use metadata::get_local_deps;
+use metadata::get_local_pkgs;
 use settings::acquire_lock;
 use snafu::ResultExt;
 use statebox::StateBox;
@@ -69,7 +69,7 @@ fn run(states: &StateBox, args: Option<&[String]>, purge: bool) -> PostAction {
         Ok(runtime) => runtime,
         Err(source) => return PostAction::Fuck(WhatError::Remove { source }),
     };
-    match runtime.block_on(get_local_deps(&data)) {
+    match runtime.block_on(get_local_pkgs(&data)) {
         Ok(metadatas) => {
             println!();
             if metadatas.is_empty() {
@@ -110,7 +110,7 @@ fn run(states: &StateBox, args: Option<&[String]>, purge: bool) -> PostAction {
                 }
             }
             for package in metadatas.primary {
-                if let Err(source) = package.remove(purge) {
+                if let Err(source) = runtime.block_on(package.remove(purge, None)) {
                     return PostAction::Fuck(WhatError::Remove { source });
                 };
             }

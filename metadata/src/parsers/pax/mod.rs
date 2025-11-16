@@ -48,8 +48,10 @@ impl RawPax {
         } else {
             OriginKind::Pax(self.origin.clone())
         };
-        let build_dependencies = Self::as_dep_kind(&self.build_dependencies)?;
-        let runtime_dependencies = Self::as_dep_kind(&self.runtime_dependencies)?;
+        let build_dependencies =
+            crate::depend_kind::DependKindVec(Self::as_dep_kind(&self.build_dependencies)?);
+        let runtime_dependencies =
+            crate::depend_kind::DependKindVec(Self::as_dep_kind(&self.runtime_dependencies)?);
         Some(ProcessedMetaData {
             name: self.name,
             kind: MetaDataKind::Pax,

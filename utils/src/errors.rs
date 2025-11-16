@@ -66,10 +66,12 @@ pub enum HowError {
     RuntimeError { source: tokio::io::Error },
     #[snafu(display("{message} for package `{package}`!"))]
     SystemError { message: MyStr, package: MyStr },
+    #[snafu(display("SQL Error! ({source})"))]
+    SQLError { source: sqlx::Error },
     #[snafu(display("Deserialization failed for {loc}! ({source})"))]
-    YAMLError {
+    JSONError {
         #[snafu(implicit)]
-        source: serde_norway::Error,
+        source: serde_json::Error,
         loc: MyStr,
     },
 }
@@ -108,12 +110,36 @@ impl Debug for IOAction {
 }
 
 pub enum Parsers {
+    DependKind,
+    DepVer,
+    InstalledCompilable,
+    InstalledInstallKind,
+    MetaDataKind,
+    OriginKind,
+    PreBuilt,
+    ProcessedCompilable,
+    ProcessedInstallKind,
+    Range,
+    Specific,
     Version,
+    VerReq,
 }
 impl Debug for Parsers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::DependKind => "DependKind",
+            Self::DepVer => "DepVer",
+            Self::InstalledCompilable => "InstalledCompilable",
+            Self::InstalledInstallKind => "InstalledInstallKind",
+            Self::MetaDataKind => "MetaDataKind",
+            Self::OriginKind => "OriginKind",
+            Self::PreBuilt => "PreBuilt",
+            Self::ProcessedCompilable => "ProcessedCompilable",
+            Self::ProcessedInstallKind => "ProcessedInstallKind",
+            Self::Range => "Range",
+            Self::Specific => "Specific",
             Self::Version => "Version",
+            Self::VerReq => "VerReq",
         })
     }
 }

@@ -11,6 +11,7 @@ use debian_control::{
 use lazy_regex::regex_captures_iter;
 use settings::{AptKind, Arch};
 use snafu::{OptionExt, ResultExt};
+use sqlx::SqlitePool;
 use utils::{
     Range, VerReq, Version,
     errors::{HowError, IOAction, IOSnafu, NetSnafu, SystemSnafu, WhereError},
@@ -19,7 +20,7 @@ use utils::{
 
 use crate::{
     FuckWrap,
-    depend_kind::DependKind,
+    depend_kind::{self, DependKind},
     processed::{PreBuilt, ProcessedMetaData},
     versioning::DepVer,
 };
@@ -83,6 +84,7 @@ impl RawApt {
         name: &str,
         version: &str,
         dependent: bool,
+        pool: &SqlitePool,
     ) -> Result<ProcessedMetaData, WhereError> {
         let folder = if name.starts_with("lib") && name.len() > 3 {
             name[0..4].to_string()
@@ -210,14 +212,15 @@ impl RawApt {
             })
             .wrap();
         }
-        Self::to_processed(&binary, version, source, code, kind, dependent)
+        Self::to_processed(&binary, version, source, code, kind, dependent, pool)
+            .await
             .context(SystemSnafu {
                 message: "Invalid control file",
                 package: name.to_string(),
             })
             .wrap()
     }
-    pub fn to_processed(
+    pub async fn to_processed(
         binary: &Binary,
         version: &str,
         // origin: &str,
@@ -225,6 +228,7 @@ impl RawApt {
         code: &str,
         kind: &AptKind,
         dependent: bool,
+        pool: &SqlitePool,
     ) -> Option<ProcessedMetaData> {
         let package = binary.name()?;
         let description = binary.description().unwrap_or_default();
@@ -234,10 +238,10 @@ impl RawApt {
         let deps = {
             let mut deps = HashSet::new();
             if let Some(depends) = depends {
-                deps.extend(Self::to_depends(&depends)?);
+                deps.extend(Self::to_depends(&depends, pool).await?);
             }
             if let Some(recommends) = recommends {
-                deps.extend(Self::to_depends(&recommends)?);
+                deps.extend(Self::to_depends(&recommends, pool).await?);
             }
             // if let Some(suggests) = _suggests {
             //     deps.extend(Self::to_depends(&suggests)?);
@@ -255,8 +259,8 @@ impl RawApt {
                 kind: kind.clone(),
             },
             dependent,
-            build_dependencies: Vec::new(),
-            runtime_dependencies: deps,
+            build_dependencies: depend_kind::DependKindVec(Vec::new()),
+            runtime_dependencies: depend_kind::DependKindVec(deps),
             install_kind: crate::processed::ProcessedInstallKind::PreBuilt(PreBuilt {
                 critical: Vec::new(),
                 configs: Vec::new(),
@@ -272,7 +276,7 @@ impl RawApt {
             _ => Arch::NoArch,
         }
     }
-    fn to_depends(relations: &Relations) -> Option<HashSet<DependKind>> {
+    async fn to_depends(relations: &Relations, pool: &SqlitePool) -> Option<HashSet<DependKind>> {
         let mut depends = HashSet::new();
         for versions in relations.to_string().split(",") {
             let mut choices = HashSet::new();
@@ -309,7 +313,7 @@ impl RawApt {
                     choices.insert(DependKind::Latest(version.to_string()));
                 }
             }
-            depends.extend(DependKind::choose(choices));
+            depends.extend(DependKind::choose(choices, pool).await);
         }
         Some(depends)
     }
