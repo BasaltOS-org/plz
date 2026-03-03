@@ -448,7 +448,7 @@ impl ProcessedMetaData {
                     )
                     .await
                     {
-                        Ok(data) => dbg!(data),
+                        Ok(data) => data,
                         Err(fault) => {
                             println!("{fault}");
                             return None;
@@ -658,7 +658,7 @@ impl ProcessedMetaData {
     pub fn as_specific(&self) -> Result<Specific, WhereError> {
         Ok(Specific {
             name: self.name.to_string(),
-            version: dbg!(Version::parse(&self.version)).wrap()?,
+            version: Version::parse(&self.version).wrap()?,
         })
     }
 }

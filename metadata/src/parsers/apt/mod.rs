@@ -25,7 +25,16 @@ use crate::{
     versioning::DepVer,
 };
 
-pub struct RawApt {}
+pub struct RawApt {
+    package: String,
+    version: String,
+    installed_size: String,
+    depends: String,
+    filename: String,
+    size: String,
+    sha512: String,
+    description: String,
+}
 impl RawApt {
     pub async fn get_vers(
         source: &str,
@@ -45,7 +54,7 @@ impl RawApt {
             return vers;
         };
         let endpoint = format!("{source}/pool/{kind}/{folder}/{name}");
-        let Ok(response) = reqwest::get(dbg!(endpoint)).await else {
+        let Ok(response) = reqwest::get(endpoint).await else {
             return vers;
         };
         let Ok(mut body) = response.text().await else {
@@ -203,7 +212,6 @@ impl RawApt {
                 package: name.to_string(),
             })
             .wrap()?;
-        dbg!(binary.to_string());
         let arch = Self::get_arch(&binary.architecture().unwrap_or_default());
         if !arch.is_compatible(name).wrap()? {
             return Err(HowError::SystemError {
@@ -296,7 +304,7 @@ impl RawApt {
                     let Ok(ver) = Version::parse(full_ver[2..].trim()) else {
                         return None;
                     };
-                    match dbg!(&full_ver[..2]) {
+                    match &full_ver[..2] {
                         ">>" => prior = VerReq::Gt(ver).negotiate(prior),
                         ">=" => prior = VerReq::Ge(ver).negotiate(prior),
                         "=" => prior = VerReq::Eq(ver).negotiate(prior),

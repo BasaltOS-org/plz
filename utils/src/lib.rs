@@ -180,6 +180,19 @@ pub async fn get_pool() -> Result<SqlitePool, HowError> {
     // }
 }
 
+pub async fn get_apt_pool(source: &str, code: &str, kind: &str) -> Result<SqlitePool, HowError> {
+    let path = PathBuf::from("/etc/pax/apt.db");
+    let options = SqliteConnectOptions::from_str(&path.to_string_lossy())
+        .context(SQLSnafu)?
+        .create_if_missing(true);
+    let db = SqlitePool::connect_with(options).await.context(SQLSnafu)?;
+    query(r"CREATE TABLE IF NOT EXISTS ? ()")
+        .execute(&db)
+        .await
+        .context(SQLSnafu)?;
+    Ok(db)
+}
+
 pub trait FuckWrap<T, E>: Sized {
     fn wrap<E2: From<WhereError>>(self) -> Result<T, E2>;
 }
