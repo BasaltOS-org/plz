@@ -347,14 +347,15 @@ dependencies = [
 name = "dew"
 version = "0.1.1"
 dependencies = [
- "flags",
- "metadata",
+ "debian-control",
+ "lazy-regex",
+ "nix",
  "reqwest",
- "settings",
+ "serde",
+ "serde_json",
  "snafu",
- "statebox",
+ "sqlx",
  "tokio",
- "utils",
 ]
 
 [[package]]
@@ -443,13 +444,6 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
-
-[[package]]
-name = "flags"
-version = "0.1.0"
-dependencies = [
- "statebox",
-]
 
 [[package]]
 name = "flume"
@@ -1098,22 +1092,6 @@ name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
-
-[[package]]
-name = "metadata"
-version = "0.1.0"
-dependencies = [
- "debian-control",
- "lazy-regex",
- "reqwest",
- "serde",
- "serde_json",
- "settings",
- "snafu",
- "sqlx",
- "tokio",
- "utils",
-]
 
 [[package]]
 name = "mime"
@@ -1791,17 +1769,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "settings"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "snafu",
- "sqlx",
- "utils",
-]
-
-[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2097,10 +2064,6 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
-
-[[package]]
-name = "statebox"
-version = "0.1.0"
 
 [[package]]
 name = "stringprep"
@@ -2429,20 +2392,6 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
-
-[[package]]
-name = "utils"
-version = "0.1.1"
-dependencies = [
- "flags",
- "nix",
- "reqwest",
- "serde",
- "serde_json",
- "snafu",
- "sqlx",
- "tokio",
-]
 
 [[package]]
 name = "vcpkg"

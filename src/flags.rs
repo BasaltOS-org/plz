@@ -1,4 +1,4 @@
-use statebox::StateBox;
+use crate::statebox::StateBox;
 
 pub struct Flag {
     pub short: Option<char>,

@@ -1,12 +1,12 @@
-use serde::Deserialize;
-use settings::OriginKind;
-use utils::{Range, VerReq, Version};
-
-use crate::{
-    DepVer, DependKind,
+use crate::metadata::{
+    DepVer, DependKind, depend_kind,
     parsers::MetaDataKind,
     processed::{ProcessedCompilable, ProcessedInstallKind, ProcessedMetaData},
 };
+use crate::settings::OriginKind;
+use crate::utils::{Range, VerReq, Version};
+
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct RawDew {
@@ -49,9 +49,9 @@ impl RawDew {
             OriginKind::Dew(self.origin.clone())
         };
         let build_dependencies =
-            crate::depend_kind::DependKindVec(Self::as_dep_kind(&self.build_dependencies)?);
+            depend_kind::DependKindVec(Self::as_dep_kind(&self.build_dependencies)?);
         let runtime_dependencies =
-            crate::depend_kind::DependKindVec(Self::as_dep_kind(&self.runtime_dependencies)?);
+            depend_kind::DependKindVec(Self::as_dep_kind(&self.runtime_dependencies)?);
         Some(ProcessedMetaData {
             name: self.name,
             kind: MetaDataKind::Dew,

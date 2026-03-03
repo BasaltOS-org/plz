@@ -1,9 +1,9 @@
-use flags::Flag;
-use settings::{SettingsJson, acquire_lock, remove_lock};
-use statebox::StateBox;
-use utils::{FuckWrap, PostAction, choice, errors::WhereError};
-
 use crate::commands::Command;
+use crate::errors::WhereError;
+use crate::flags::Flag;
+use crate::settings::{SettingsJson, acquire_lock, remove_lock};
+use crate::statebox::StateBox;
+use crate::utils::{FuckWrap, PostAction, choice, yes_flag};
 
 pub fn build(hierarchy: &[String]) -> Command {
     let setting = Flag::new(
@@ -18,7 +18,7 @@ pub fn build(hierarchy: &[String]) -> Command {
         "configure",
         vec![String::from("c")],
         "Configures internal dew settings.",
-        vec![setting, utils::yes_flag()],
+        vec![setting, yes_flag()],
         None,
         |_, _| PostAction::GetHelp,
         hierarchy,

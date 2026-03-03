@@ -1,21 +1,19 @@
-use metadata::get_local_pkgs;
-use settings::acquire_lock;
-use snafu::ResultExt;
-use statebox::StateBox;
-use tokio::runtime::Runtime;
-use utils::{
-    FuckWrap, PostAction, choice,
-    errors::{RuntimeSnafu, WhatError, WhereError},
-};
-
 use crate::commands::Command;
+use crate::errors::{RuntimeSnafu, WhatError, WhereError};
+use crate::metadata::get_local_pkgs;
+use crate::settings::acquire_lock;
+use crate::statebox::StateBox;
+use crate::utils::{FuckWrap, PostAction, choice, specific_flag, yes_flag};
+
+use snafu::ResultExt;
+use tokio::runtime::Runtime;
 
 pub fn build_remove(hierarchy: &[String]) -> Command {
     Command::new(
         "remove",
         vec![String::from("r")],
         "Removes a package, whilst maintaining any user-made configurations",
-        vec![utils::specific_flag(), utils::yes_flag()],
+        vec![specific_flag(), yes_flag()],
         None,
         remove,
         hierarchy,
@@ -27,7 +25,7 @@ pub fn build_purge(hierarchy: &[String]) -> Command {
         "purge",
         vec![String::from("p")],
         "Removes a package, WITHOUT maintaining any user-made configurations",
-        vec![utils::specific_flag(), utils::yes_flag()],
+        vec![specific_flag(), yes_flag()],
         None,
         purge,
         hierarchy,

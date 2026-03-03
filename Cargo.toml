@@ -1,37 +1,19 @@
-[workspace]
-resolver = "3"
-members = ["flags", "metadata", "settings", "statebox", "utils"]
 
-[workspace.dependencies]
+[dependencies]
 debian-control = "0.2.0"
-flags = { path = "./flags" }
 lazy-regex = { version = "3.4.2" }
-metadata = { path = "./metadata" }
 nix = { version = "0.31.2", features = ["user"] }
 reqwest = "0.13.2"
-settings = { path = "./settings" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 snafu = "0.9.0"
-statebox = { path = "./statebox" }
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio"] }
 tokio = { version = "1.48.0", features = ["rt-multi-thread"] }
-utils = { path = "./utils" }
 
 [package]
 name = "dew"
 version = "0.1.1"
 edition = "2024"
-
-[dependencies]
-flags.workspace = true
-metadata.workspace = true
-reqwest.workspace = true
-settings.workspace = true
-snafu.workspace = true
-statebox.workspace = true
-tokio.workspace = true
-utils.workspace = true
 
 [profile.release]
 opt-level = 3

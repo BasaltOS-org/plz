@@ -1,21 +1,19 @@
-use metadata::{upgrade_all, upgrade_only, upgrade_packages};
-use settings::acquire_lock;
-use snafu::ResultExt;
-use statebox::StateBox;
-use tokio::runtime::Runtime;
-use utils::{
-    FuckWrap, PostAction, choice,
-    errors::{RuntimeSnafu, WhatError, WhereError},
-};
-
 use crate::commands::Command;
+use crate::errors::{RuntimeSnafu, WhatError, WhereError};
+use crate::metadata::{upgrade_all, upgrade_only, upgrade_packages};
+use crate::settings::acquire_lock;
+use crate::statebox::StateBox;
+use crate::utils::{FuckWrap, PostAction, choice, yes_flag};
+
+use snafu::ResultExt;
+use tokio::runtime::Runtime;
 
 pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
         "upgrade",
         vec![String::from("g")],
         "Upgrades a non-phased package from its upgrade metadata.",
-        vec![utils::yes_flag()],
+        vec![yes_flag()],
         None,
         run,
         hierarchy,

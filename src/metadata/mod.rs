@@ -1,20 +1,17 @@
-use settings::{OriginKind, SettingsJson};
-use snafu::{OptionExt, ResultExt};
-use sqlx::{Sqlite, SqlitePool, query_as};
-use std::collections::HashSet;
-use utils::{
-    FuckNest, FuckWrap, Range, VerReq, Version,
-    errors::{SQLSnafu, SystemSnafu, WhereError},
-    get_pool,
-};
-
-use crate::{
+use crate::errors::{SQLSnafu, SystemSnafu, WhereError};
+use crate::metadata::{
     depend_kind::DependKind,
-    installed::{InstalledInstallKind, InstalledMetaData},
-    parsers::{MetaDataKind, dew},
+    installed::InstalledMetaData,
+    parsers::MetaDataKind,
     processed::ProcessedMetaData,
     versioning::{DepVer, Specific},
 };
+use crate::settings::{OriginKind, SettingsJson};
+use crate::utils::{FuckNest, FuckWrap, Range, VerReq, Version, get_pool};
+
+use snafu::{OptionExt, ResultExt};
+use sqlx::{Sqlite, SqlitePool, query_as};
+use std::collections::HashSet;
 
 pub mod depend_kind;
 pub mod installed;

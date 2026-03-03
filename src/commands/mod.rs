@@ -1,9 +1,9 @@
-use std::{env, io::Write, process::Command as RunCommand, slice::Iter};
+use crate::flags::Flag;
+use crate::settings::remove_lock;
+use crate::statebox::StateBox;
+use crate::utils::{PostAction, choice};
 
-use flags::Flag;
-use settings::remove_lock;
-use statebox::StateBox;
-use utils::{PostAction, choice};
+use std::{env, io::Write, process::Command as RunCommand, slice::Iter};
 
 pub mod configure;
 pub mod dew_init;

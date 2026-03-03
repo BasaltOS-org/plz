@@ -1,20 +1,17 @@
-use std::{
-    cmp::Ordering, fmt::Display, fs::DirBuilder, io::Write, path::PathBuf, process::Command,
-    str::FromStr,
-};
-
-use flags::Flag;
-use nix::unistd;
-use serde::{Deserialize, Serialize};
-use snafu::ResultExt;
-use sqlx::{SqlitePool, query, sqlite::SqliteConnectOptions};
-
 use crate::errors::{
     HowError, IOAction, IOSnafu, NestedSnafu, Parsers, SQLSnafu, WhatError, WhereError,
     WrappedSnafu,
 };
+use crate::flags::Flag;
 
-pub mod errors;
+use nix::unistd;
+use serde::{Deserialize, Serialize};
+use snafu::ResultExt;
+use sqlx::{SqlitePool, query, sqlite::SqliteConnectOptions};
+use std::{
+    cmp::Ordering, fmt::Display, fs::DirBuilder, io::Write, path::PathBuf, process::Command,
+    str::FromStr,
+};
 
 // The action to perform once a command has run
 pub enum PostAction {

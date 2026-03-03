@@ -1,16 +1,15 @@
-use serde::{Deserialize, Serialize};
-use settings::OriginKind;
-use snafu::{OptionExt, ResultExt};
-use sqlx::{Decode, Encode, FromRow, Sqlite, SqlitePool, Type, query, query_as};
-use std::fmt::Display;
-use utils::errors::{HowError, Parsers, SQLSnafu, SystemSnafu, WhereError};
-
-use crate::{
+use crate::errors::{HowError, Parsers, SQLSnafu, SystemSnafu, WhereError};
+use crate::metadata::{
     FuckNest, FuckWrap, MetaDataKind, Specific,
     processed::PreBuilt,
     versioning::{DepVerVec, SpecificVec},
 };
+use crate::settings::OriginKind;
 
+use serde::{Deserialize, Serialize};
+use snafu::{OptionExt, ResultExt};
+use sqlx::{Decode, Encode, FromRow, Sqlite, SqlitePool, Type, query, query_as};
+use std::fmt::Display;
 #[derive(Clone, Debug, Encode, FromRow, PartialEq)]
 pub struct InstalledMetaData {
     pub name: String,

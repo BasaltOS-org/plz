@@ -1,20 +1,16 @@
-use std::{fmt::Display, process::Command};
-
-use serde::{Deserialize, Serialize};
-use settings::{OriginKind, SettingsJson};
-use snafu::{OptionExt, ResultExt, location};
-use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type, query, query_as};
-use utils::{
-    Range, VerReq, Version,
-    errors::{HowError, Parsers, SQLSnafu, SystemSnafu, WhereError},
-    get_pool,
-};
-
-use crate::{
+use crate::errors::{HowError, Parsers, SQLSnafu, SystemSnafu, WhereError};
+use crate::metadata::{
     FuckNest, FuckWrap, QueuedChanges, get_installed_metadata,
     installed::{InstalledInstallKind, InstalledMetaData},
     processed::ProcessedMetaData,
 };
+use crate::settings::{OriginKind, SettingsJson};
+use crate::utils::{Range, VerReq, Version, get_pool};
+
+use serde::{Deserialize, Serialize};
+use snafu::{OptionExt, ResultExt, location};
+use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type, query, query_as};
+use std::{fmt::Display, process::Command};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DepVer {

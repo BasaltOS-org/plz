@@ -1,3 +1,9 @@
+use crate::errors::{HowError, IOAction, IOSnafu, JSONSnafu, Parsers};
+use crate::utils::{PostAction, get_dir, is_root};
+
+use serde::{Deserialize, Serialize};
+use snafu::ResultExt;
+use sqlx::{Decode, Encode, Sqlite, Type};
 use std::{
     fmt::Display,
     fs::File,
@@ -5,15 +11,6 @@ use std::{
     path::PathBuf,
     thread::sleep,
     time::Duration,
-};
-
-use serde::{Deserialize, Serialize};
-use snafu::ResultExt;
-use sqlx::{Decode, Encode, Sqlite, Type};
-use utils::{
-    PostAction,
-    errors::{HowError, IOAction, IOSnafu, JSONSnafu, Parsers},
-    get_dir, is_root,
 };
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]

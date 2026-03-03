@@ -1,21 +1,19 @@
-use metadata::get_packages;
-use settings::{SettingsJson, acquire_lock};
-use snafu::ResultExt;
-use statebox::StateBox;
-use tokio::runtime::Runtime;
-use utils::{
-    FuckWrap, PostAction, choice,
-    errors::{RuntimeSnafu, WhatError, WhereError},
-};
-
 use crate::commands::Command;
+use crate::errors::{RuntimeSnafu, WhatError, WhereError};
+use crate::metadata::get_packages;
+use crate::settings::{SettingsJson, acquire_lock};
+use crate::statebox::StateBox;
+use crate::utils::{FuckWrap, PostAction, choice, specific_flag, yes_flag};
+
+use snafu::ResultExt;
+use tokio::runtime::Runtime;
 
 pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
         "install",
         vec![String::from("i")],
         "Install the application from a specified path",
-        vec![utils::specific_flag(), utils::yes_flag()],
+        vec![specific_flag(), yes_flag()],
         None,
         run,
         hierarchy,

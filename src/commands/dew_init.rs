@@ -1,19 +1,12 @@
-use flags::Flag;
-use settings::OriginKind;
-use settings::SettingsJson;
-use settings::acquire_lock;
-use snafu::ResultExt;
-use statebox::StateBox;
-use tokio::runtime::Runtime;
-use utils::FuckWrap;
-use utils::PostAction;
-use utils::errors::HowError;
-use utils::errors::NetSnafu;
-use utils::errors::RuntimeSnafu;
-use utils::errors::WhatError;
-use utils::errors::WhereError;
-
 use crate::commands::Command;
+use crate::errors::{HowError, NetSnafu, RuntimeSnafu, WhatError, WhereError};
+use crate::flags::Flag;
+use crate::settings::{OriginKind, SettingsJson, acquire_lock};
+use crate::statebox::StateBox;
+use crate::utils::{FuckWrap, PostAction};
+
+use snafu::ResultExt;
+use tokio::runtime::Runtime;
 
 static LONG_NAME: &str = "force";
 

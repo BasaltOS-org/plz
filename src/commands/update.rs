@@ -1,14 +1,12 @@
-use metadata::collect_updates;
-use settings::acquire_lock;
-use snafu::ResultExt;
-use statebox::StateBox;
-use tokio::runtime::Runtime;
-use utils::{
-    FuckWrap, PostAction,
-    errors::{RuntimeSnafu, WhatError, WhereError},
-};
-
 use crate::commands::Command;
+use crate::errors::{RuntimeSnafu, WhatError, WhereError};
+use crate::metadata::collect_updates;
+use crate::settings::acquire_lock;
+use crate::statebox::StateBox;
+use crate::utils::{FuckWrap, PostAction};
+
+use snafu::ResultExt;
+use tokio::runtime::Runtime;
 
 pub fn build(hierarchy: &[String]) -> Command {
     Command::new(

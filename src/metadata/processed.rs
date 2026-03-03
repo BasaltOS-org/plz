@@ -1,21 +1,25 @@
+use crate::errors::{
+    HowError, IOAction, IOSnafu, NetSnafu, Parsers, SQLSnafu, SystemSnafu, WhereError,
+};
+use crate::metadata::installed::InstalledInstallKind;
+use crate::metadata::parsers::dew::RawDew;
+use crate::metadata::{
+    DepVer, DependKind, FuckNest, FuckWrap, InstallPackage, InstalledMetaData, MetaDataKind,
+    Specific,
+    depend_kind::DependKindVec,
+    get_installed_metadata,
+    installed::InstalledCompilable,
+    parsers::apt::RawApt,
+    versioning::{self, SpecificVec},
+};
+use crate::settings::{Arch, OriginKind};
+use crate::utils::{Version, tmpfile};
+
 use serde::{Deserialize, Serialize};
-use settings::{Arch, OriginKind};
 use snafu::{OptionExt, ResultExt, location};
 use sqlx::{Decode, Encode, FromRow, Sqlite, SqlitePool, Type, query, query_as};
 use std::{
     collections::HashSet, fmt::Display, hash::Hash, io::Write, process::Command as RunCommand,
-};
-use utils::errors::{
-    HowError, IOAction, IOSnafu, NetSnafu, Parsers, SQLSnafu, SystemSnafu, WhereError,
-};
-use utils::{Version, tmpfile};
-
-use crate::depend_kind::DependKindVec;
-use crate::versioning::{self, SpecificVec};
-use crate::{
-    DepVer, DependKind, FuckNest, FuckWrap, InstallPackage, InstalledInstallKind,
-    InstalledMetaData, MetaDataKind, Specific, dew::RawDew, get_installed_metadata,
-    installed::InstalledCompilable, parsers::apt::RawApt,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]

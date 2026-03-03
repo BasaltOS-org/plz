@@ -1,3 +1,14 @@
+use crate::errors::{HowError, IOAction, IOSnafu, NetSnafu, SystemSnafu, WhereError};
+use crate::metadata::processed;
+use crate::metadata::{
+    FuckWrap,
+    depend_kind::{self, DependKind},
+    processed::{PreBuilt, ProcessedMetaData},
+    versioning::DepVer,
+};
+use crate::settings::{self, AptKind, Arch};
+use crate::utils::{self, Range, VerReq, Version, tmpdir};
+
 use std::{
     collections::HashSet,
     fs::File,
@@ -9,21 +20,8 @@ use debian_control::{
     lossless::{Control, Relations},
 };
 use lazy_regex::regex_captures_iter;
-use settings::{AptKind, Arch};
 use snafu::{OptionExt, ResultExt};
 use sqlx::SqlitePool;
-use utils::{
-    Range, VerReq, Version,
-    errors::{HowError, IOAction, IOSnafu, NetSnafu, SystemSnafu, WhereError},
-    tmpdir,
-};
-
-use crate::{
-    FuckWrap,
-    depend_kind::{self, DependKind},
-    processed::{PreBuilt, ProcessedMetaData},
-    versioning::DepVer,
-};
 
 pub struct RawApt {
     package: String,
@@ -269,7 +267,7 @@ impl RawApt {
             dependent,
             build_dependencies: depend_kind::DependKindVec(Vec::new()),
             runtime_dependencies: depend_kind::DependKindVec(deps),
-            install_kind: crate::processed::ProcessedInstallKind::PreBuilt(PreBuilt {
+            install_kind: processed::ProcessedInstallKind::PreBuilt(PreBuilt {
                 critical: Vec::new(),
                 configs: Vec::new(),
             }),

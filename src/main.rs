@@ -1,6 +1,12 @@
 use std::{env, path::Path};
 
 pub mod commands;
+pub mod errors;
+pub mod flags;
+pub mod metadata;
+pub mod settings;
+pub mod statebox;
+pub mod utils;
 
 pub fn main() {
     let args: Vec<String> = env::args().collect();

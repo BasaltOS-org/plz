@@ -1,18 +1,15 @@
-use std::{collections::HashSet, fmt::Display};
-
-use serde::{Deserialize, Serialize};
-use settings::OriginKind;
-use snafu::OptionExt;
-use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type};
-use utils::{
-    Range, VerReq, Version, command,
-    errors::{HowError, Parsers, SystemSnafu, WhereError},
-};
-
-use crate::{
+use crate::errors::{HowError, Parsers, SystemSnafu, WhereError};
+use crate::metadata::{
     DepVer, FuckNest, FuckWrap, InstallPackage, Specific, get_installed_metadata,
     processed::ProcessedMetaData,
 };
+use crate::settings::OriginKind;
+use crate::utils::{Range, VerReq, Version, command};
+
+use serde::{Deserialize, Serialize};
+use snafu::OptionExt;
+use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type};
+use std::{collections::HashSet, fmt::Display};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum DependKind {
