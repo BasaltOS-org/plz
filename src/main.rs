@@ -1,12 +1,6 @@
 use std::{env, path::Path};
 
-pub mod configure;
-pub mod dew_init;
-pub mod emancipate;
-pub mod install;
-pub mod remove;
-pub mod update;
-pub mod upgrade;
+pub mod commands;
 
 pub fn main() {
     let args: Vec<String> = env::args().collect();
@@ -24,14 +18,14 @@ pub fn main() {
         "The DEW package manager.",
         vec![],
         Some(vec![
-            configure::build,
-            emancipate::build,
-            install::build,
-            dew_init::build,
-            remove::build_purge,
-            remove::build_remove,
-            update::build,
-            upgrade::build,
+            commands::configure::build,
+            commands::unbind::build,
+            commands::install::build,
+            commands::dew_init::build,
+            commands::remove::build_purge,
+            commands::remove::build_remove,
+            commands::update::build,
+            commands::upgrade::build,
         ]),
         |_command, _args| utils::PostAction::GetHelp,
         &[],

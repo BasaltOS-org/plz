@@ -1,4 +1,3 @@
-use commands::Command;
 use metadata::get_local_pkgs;
 use settings::acquire_lock;
 use snafu::ResultExt;
@@ -8,6 +7,8 @@ use utils::{
     FuckWrap, PostAction, choice,
     errors::{RuntimeSnafu, WhatError, WhereError},
 };
+
+use crate::commands::Command;
 
 pub fn build_remove(hierarchy: &[String]) -> Command {
     Command::new(

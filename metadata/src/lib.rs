@@ -487,8 +487,8 @@ pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), Wher
 }
 
 /* #endregion Upgrade */
-/* #region Emancipate */
-pub async fn emancipate(data: &[(&String, Option<&String>)]) -> Result<(), WhereError> {
+/* #region Unbind */
+pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), WhereError> {
     let pool = get_pool().await.nest("Get Sqlite Pool")?;
     for bit in data {
         let (dep, ver) = *bit;
@@ -528,4 +528,4 @@ pub async fn emancipate(data: &[(&String, Option<&String>)]) -> Result<(), Where
     }
     Ok(())
 }
-/* #endregion Emancipate */
+/* #endregion Unbind */

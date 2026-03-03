@@ -1,9 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["commands", "flags", "metadata", "settings", "statebox", "utils"]
+members = ["flags", "metadata", "settings", "statebox", "utils"]
 
 [workspace.dependencies]
-commands = { path = "./commands" }
 debian-control = "0.2.0"
 flags = { path = "./flags" }
 lazy-regex = { version = "3.4.2" }
@@ -25,7 +24,6 @@ version = "0.1.1"
 edition = "2024"
 
 [dependencies]
-commands.workspace = true
 flags.workspace = true
 metadata.workspace = true
 reqwest.workspace = true

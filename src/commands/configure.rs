@@ -1,8 +1,9 @@
-use commands::Command;
 use flags::Flag;
 use settings::{SettingsJson, acquire_lock, remove_lock};
 use statebox::StateBox;
 use utils::{FuckWrap, PostAction, choice, errors::WhereError};
+
+use crate::commands::Command;
 
 pub fn build(hierarchy: &[String]) -> Command {
     let setting = Flag::new(

@@ -1,4 +1,3 @@
-use commands::Command;
 use flags::Flag;
 use settings::OriginKind;
 use settings::SettingsJson;
@@ -13,6 +12,8 @@ use utils::errors::NetSnafu;
 use utils::errors::RuntimeSnafu;
 use utils::errors::WhatError;
 use utils::errors::WhereError;
+
+use crate::commands::Command;
 
 static LONG_NAME: &str = "force";
 

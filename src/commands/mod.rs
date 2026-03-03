@@ -5,6 +5,14 @@ use settings::remove_lock;
 use statebox::StateBox;
 use utils::{PostAction, choice};
 
+pub mod configure;
+pub mod dew_init;
+pub mod install;
+pub mod remove;
+pub mod unbind;
+pub mod update;
+pub mod upgrade;
+
 // Helper return enum for handlers
 enum HandlerResult {
     ContinueOuter,

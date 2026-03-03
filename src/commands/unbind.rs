@@ -1,5 +1,4 @@
-use commands::Command;
-use metadata::emancipate;
+use metadata::unbind;
 use settings::acquire_lock;
 use snafu::ResultExt;
 use statebox::StateBox;
@@ -9,10 +8,11 @@ use utils::{
     errors::{RuntimeSnafu, WhatError, WhereError},
 };
 
+use crate::commands::Command;
+
 pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
-        // WHat the fuck? Yes, I will hopefully find a better name...
-        "emancipate",
+        "unbind",
         vec![String::from("e")],
         "Marks a dependent package as independent.",
         vec![utils::specific_flag()],
@@ -50,7 +50,7 @@ fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
         Ok(runtime) => runtime,
         Err(source) => return PostAction::Fuck(WhatError::Install { source }),
     };
-    if let Err(source) = runtime.block_on(emancipate(&data)) {
+    if let Err(source) = runtime.block_on(unbind(&data)) {
         PostAction::Fuck(WhatError::Emancipate { source })
     } else {
         PostAction::Return
