@@ -11,7 +11,7 @@ use utils::{
 use crate::{
     depend_kind::DependKind,
     installed::{InstalledInstallKind, InstalledMetaData},
-    parsers::{MetaDataKind, pax},
+    parsers::{MetaDataKind, dew},
     processed::ProcessedMetaData,
     versioning::{DepVer, Specific},
 };

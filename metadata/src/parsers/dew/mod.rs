@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
-pub struct RawPax {
+pub struct RawDew {
     name: String,
     description: String,
     version: String,
@@ -23,7 +23,7 @@ pub struct RawPax {
     hash: String,
 }
 
-impl RawPax {
+impl RawDew {
     pub fn to_process(self, dependent: bool) -> Option<ProcessedMetaData> {
         let origin = if self.origin.starts_with("gh/") {
             let split = self
@@ -46,7 +46,7 @@ impl RawPax {
         //     return None;
         // };
         } else {
-            OriginKind::Pax(self.origin.clone())
+            OriginKind::Dew(self.origin.clone())
         };
         let build_dependencies =
             crate::depend_kind::DependKindVec(Self::as_dep_kind(&self.build_dependencies)?);
@@ -54,7 +54,7 @@ impl RawPax {
             crate::depend_kind::DependKindVec(Self::as_dep_kind(&self.runtime_dependencies)?);
         Some(ProcessedMetaData {
             name: self.name,
-            kind: MetaDataKind::Pax,
+            kind: MetaDataKind::Dew,
             description: self.description,
             version: self.version,
             origin,
@@ -100,13 +100,13 @@ impl RawPax {
             // } else if let Some((name, ver)) = dep.split_once(':') {
             //     DependKind::Specific(DepVer {
             //         name: name.to_string(),
-            //         range: RawPax::parse_ver(ver)?,
+            //         range: RawDew::parse_ver(ver)?,
             //     })
             } else if let Some(index) = dep.find(['=', '>', '<']) {
                 let (name, ver) = dep.split_at(index);
                 DependKind::Specific(DepVer {
                     name: name.to_string(),
-                    range: RawPax::parse_ver(ver)?,
+                    range: RawDew::parse_ver(ver)?,
                 })
             } else {
                 DependKind::Latest(dep.to_string())

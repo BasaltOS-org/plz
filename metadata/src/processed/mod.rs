@@ -14,8 +14,8 @@ use crate::depend_kind::DependKindVec;
 use crate::versioning::{self, SpecificVec};
 use crate::{
     DepVer, DependKind, FuckNest, FuckWrap, InstallPackage, InstalledInstallKind,
-    InstalledMetaData, MetaDataKind, Specific, get_installed_metadata,
-    installed::InstalledCompilable, parsers::apt::RawApt, pax::RawPax,
+    InstalledMetaData, MetaDataKind, Specific, dew::RawDew, get_installed_metadata,
+    installed::InstalledCompilable, parsers::apt::RawApt,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -253,7 +253,7 @@ impl ProcessedMetaData {
             })
             .wrap()?;
         let endpoint = match self.origin {
-            OriginKind::Pax(pax) => format!("{pax}?v={}", self.version),
+            OriginKind::Dew(dew) => format!("{dew}?v={}", self.version),
             OriginKind::Github { .. } => {
                 return Err(WhereError::debug(location!()));
                 // thingy
@@ -408,7 +408,7 @@ impl ProcessedMetaData {
         let mut metadata = None;
         for source in sources {
             match source {
-                OriginKind::Pax(source) => {
+                OriginKind::Dew(source) => {
                     // metadata = {
                     let endpoint = if let Some(version) = version {
                         format!("{source}/packages/metadata/{name}?v={version}")
@@ -416,11 +416,11 @@ impl ProcessedMetaData {
                         format!("{source}/packages/metadata/{name}")
                     };
                     let body = reqwest::get(endpoint).await.ok()?.text().await.ok()?;
-                    if let Ok(raw_pax) = serde_json::from_str::<RawPax>(&body) {
-                        metadata = raw_pax.to_process(dependent);
+                    if let Ok(raw_dew) = serde_json::from_str::<RawDew>(&body) {
+                        metadata = raw_dew.to_process(dependent);
                         break;
                     }
-                    //     && let Some(processed) = raw_pax.process()
+                    //     && let Some(processed) = raw_dew.process()
                     // {
                     //     Some(processed)
                     // } else {

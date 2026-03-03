@@ -4,11 +4,11 @@ use sqlx::{Decode, Encode, Sqlite, Type, error::BoxDynError};
 use utils::errors::{HowError, Parsers};
 
 pub mod apt;
-pub mod pax;
+pub mod dew;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum MetaDataKind {
-    Pax,
+    Dew,
     Apt,
 }
 
@@ -19,7 +19,7 @@ impl MetaDataKind {
             util: Parsers::MetaDataKind,
         })?;
         match kind as u8 {
-            0 => Ok(Self::Pax),
+            0 => Ok(Self::Dew),
             1 => Ok(Self::Apt),
             kind => Err(HowError::ParseError {
                 message: format!("Invalid kind identifier `{kind}`!").into(),
@@ -32,7 +32,7 @@ impl MetaDataKind {
 impl Display for MetaDataKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Pax => "\x00",
+            Self::Dew => "\x00",
             Self::Apt => "\x01",
         })
     }

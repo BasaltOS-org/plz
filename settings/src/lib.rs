@@ -107,7 +107,7 @@ pub enum OriginKind {
         code: String,
         kind: AptKind,
     },
-    Pax(String),
+    Dew(String),
     Github {
         user: String,
         repo: String,
@@ -150,7 +150,7 @@ impl OriginKind {
                     kind,
                 })
             }
-            1 => Ok(Self::Pax(data.to_string())),
+            1 => Ok(Self::Dew(data.to_string())),
             2 => {
                 let (user, repo) = data.split_once(' ').ok_or(HowError::ParseError {
                     message: "Missing GH field `repo`!".into(),
@@ -175,7 +175,7 @@ impl Display for OriginKind {
             Self::Apt { source, code, kind } => {
                 format!("\x00{source} {code} {kind}")
             }
-            Self::Pax(pax) => format!("\x01{pax}"),
+            Self::Dew(dew) => format!("\x01{dew}"),
             Self::Github { user, repo } => format!("\x02{user} {repo}"),
         })
     }

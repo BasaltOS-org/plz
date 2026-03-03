@@ -1,7 +1,9 @@
-Pax Package Manager (Rust)
+# Dew Package Manager (Rust)
 
-# Structure
+## Structure
+
 To make the structure of this repo better for readability, each subcommand will be placed in its own folder within the directory of its parent command - e.g. say there are commands `cmd1` and `cmd2`, with `cmd2` having commands `nested1` and `nested2`, the directory structure should look like so:
+
 ```
 .
 ├── (other data i.e. commands, metadata, settings, etc.)
@@ -18,11 +20,13 @@ To make the structure of this repo better for readability, each subcommand will 
 └── Cargo.toml
 ```
 
-# Pseudo-docs
+## Pseudo-docs
+
 There is no real reason why `command.rs`,`flag.rs`,and`statebox.rs` are used to manage commands instead of the standard [`clap`](https://crates.io/crates/clap) crate, so they may be swapped out in the future. For now, though, `Command` and `Flag` types will be documented below.
 
-## Command
-| Struct Field | Usage |
+### Command
+
+|Struct Field|Usage|
 |:------------:|-------|
 |Name|This is the name of the command, and used as an argument to its parent argument to call its functionality.|
 |Aliases|List of alternate names/arguments used to call this command.|
@@ -33,8 +37,9 @@ There is no real reason why `command.rs`,`flag.rs`,and`statebox.rs` are used to 
 |Run_func|The function that is responsible for the logic of the command.|
 |Hierarchy|A list of all the prior `Command`s' names for use in the help command.|
 
-## Flags
-| Struct Field | Usage |
+### Flags
+
+|Struct Field|Usage|
 |:------------:|-------|
 |Short|The short flag name, if any.|
 |Long|The long flag name.|

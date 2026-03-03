@@ -73,13 +73,13 @@ To continue anyway, run with flag `\x1B[35m--{LONG_NAME}\x1B[0m`."
 }
 
 async fn gen_sources() -> Result<(), HowError> {
-    let url = "https://raw.githubusercontent.com/oreonproject/pax-rs/refs/heads/main/endpoints.txt";
+    let url = "about:blank#blocked";
     let sources = reqwest::get(url).await.context(NetSnafu { loc: url })?;
     let sources = sources.text().await.context(NetSnafu { loc: url })?;
     let mut settings = SettingsJson::get_settings()?;
     for source in sources.trim().split('\n') {
         // thingy; make this actually detect the source type
-        let source = OriginKind::Pax(source.to_string());
+        let source = OriginKind::Dew(source.to_string());
         settings.sources.push(source);
     }
     settings.set_settings()

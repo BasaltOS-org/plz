@@ -308,7 +308,7 @@ impl Command {
                         if let Some(program) = program {
                             let mut cmd = RunCommand::new(program);
                             if !cmd
-                                .args(["pax-init", "--force"])
+                                .args(["dew-init", "--force"])
                                 .status()
                                 .is_ok_and(|x| x.code() == Some(0))
                             {

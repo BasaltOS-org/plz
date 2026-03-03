@@ -16,7 +16,7 @@ pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
         "configure",
         vec![String::from("c")],
-        "Configures internal pax settings.",
+        "Configures internal dew settings.",
         vec![setting, utils::yes_flag()],
         None,
         |_, _| PostAction::GetHelp,
