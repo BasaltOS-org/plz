@@ -1,12 +1,12 @@
+use snafu::location;
+use tokio::runtime::Runtime;
+
 use crate::commands::Command;
-use crate::errors::{RuntimeSnafu, WhatError, WhereError};
+use crate::errors::{Wrapped, WrappedError};
 use crate::metadata::get_local_pkgs;
 use crate::settings::acquire_lock;
 use crate::statebox::StateBox;
-use crate::utils::{FuckWrap, PostAction, choice, specific_flag, yes_flag};
-
-use snafu::ResultExt;
-use tokio::runtime::Runtime;
+use crate::utils::{PostAction, choice, specific_flag, yes_flag};
 
 pub fn build_remove(hierarchy: &[String]) -> Command {
     Command::new(
@@ -32,89 +32,75 @@ pub fn build_purge(hierarchy: &[String]) -> Command {
     )
 }
 
-fn remove(states: &StateBox, args: Option<&[String]>) -> PostAction {
-    run(states, args, false)
+fn remove(rt: &Runtime, states: &StateBox, args: Option<&[String]>) -> PostAction {
+    run(rt, states, args, false)
 }
 
-fn purge(states: &StateBox, args: Option<&[String]>) -> PostAction {
-    run(states, args, true)
+fn purge(rt: &Runtime, states: &StateBox, args: Option<&[String]>) -> PostAction {
+    run(rt, states, args, true)
 }
 
-fn run(states: &StateBox, args: Option<&[String]>, purge: bool) -> PostAction {
-    match acquire_lock() {
-        Ok(Some(action)) => return action,
-        Err(source) => {
-            return PostAction::Fuck(WhatError::Remove {
-                source: WhereError::WrappedError { source },
-            });
-        }
-        _ => (),
-    }
-    let mut args = match args {
-        None => return PostAction::NothingToDo,
-        Some(args) => args.iter(),
-    };
-    let mut data = Vec::new();
-    if states.get("specific").is_some_and(|x| *x) {
-        while let Some(name) = args.next()
-            && let Some(ver) = args.next()
-        {
-            data.push((name, Some(ver)));
-        }
-    } else {
-        args.for_each(|x| data.push((x, None)));
-    }
-    let runtime = match Runtime::new().context(RuntimeSnafu).wrap() {
-        Ok(runtime) => runtime,
-        Err(source) => return PostAction::Fuck(WhatError::Remove { source }),
-    };
-    match runtime.block_on(get_local_pkgs(&data)) {
-        Ok(metadatas) => {
-            println!();
-            if metadatas.is_empty() {
-                return PostAction::NothingToDo;
+fn run(rt: &Runtime, states: &StateBox, args: Option<&[String]>, purge: bool) -> PostAction {
+    match rt.block_on(async {
+        if let Some(action) = acquire_lock().await.wrap()? {
+            return Ok(action);
+        };
+        let mut args = match args {
+            None => return Ok(PostAction::NothingToDo),
+            Some(args) => args.iter(),
+        };
+        let mut data = Vec::new();
+        if states.get("specific").is_some_and(|x| *x) {
+            while let Some(name) = args.next()
+                && let Some(ver) = args.next()
+            {
+                data.push((name, Some(ver)));
             }
-            let msg = if purge { "PURGED: " } else { "REMOVED:" };
+        } else {
+            args.for_each(|x| data.push((x, None)));
+        }
+        let metadatas = get_local_pkgs(&data).await.wrap()?;
+        println!();
+        if metadatas.is_empty() {
+            return Ok(PostAction::NothingToDo);
+        }
+        let msg = if purge { "PURGED: " } else { "REMOVED:" };
+        println!(
+            "\nThe following package(s) will be {msg}  \x1B[91m{}\x1B[0m",
+            metadatas
+                .primary
+                .iter()
+                .fold(String::new(), |acc, x| format!("{acc} {}", x.name))
+                .trim()
+        );
+        if metadatas.has_deps() {
             println!(
-                "\nThe following package(s) will be {msg}  \x1B[91m{}\x1B[0m",
+                "The following package(s) will be MODIFIED: \x1B[93m{}\x1B[0m",
                 metadatas
-                    .primary
+                    .secondary
                     .iter()
                     .fold(String::new(), |acc, x| format!("{acc} {}", x.name))
                     .trim()
             );
-            if metadatas.has_deps() {
-                println!(
-                    "The following package(s) will be MODIFIED: \x1B[93m{}\x1B[0m",
-                    metadatas
-                        .secondary
-                        .iter()
-                        .fold(String::new(), |acc, x| format!("{acc} {}", x.name))
-                        .trim()
-                );
-                if states.get("yes").is_none_or(|x: &bool| !*x) {
-                    match choice("Continue?", true) {
-                        Err(source) => {
-                            return PostAction::Fuck(WhatError::Remove {
-                                source: WhereError::WrappedError { source },
-                            });
-                        }
-                        Ok(false) => {
-                            return PostAction::Fuck(WhatError::Remove {
-                                source: WhereError::other("Aborted."),
-                            });
-                        }
-                        Ok(true) => (),
-                    };
-                }
-            }
-            for package in metadatas.primary {
-                if let Err(source) = runtime.block_on(package.remove(purge, None)) {
-                    return PostAction::Fuck(WhatError::Remove { source });
+            if states.get("yes").is_none_or(|x: &bool| !*x) {
+                match choice("Continue?", true) {
+                    Err(source) => return Err(source),
+                    Ok(false) => {
+                        return Err(WrappedError::Other {
+                            error: "Operation aborted by user.".into(),
+                            loc: location!(),
+                        });
+                    }
+                    Ok(true) => (),
                 };
             }
-            PostAction::Return
         }
-        Err(source) => PostAction::Fuck(WhatError::Remove { source }),
+        for package in metadatas.primary {
+            package.remove(purge, None).await.wrap()?;
+        }
+        Ok(PostAction::Return)
+    }) {
+        Ok(action) => action,
+        Err(error) => PostAction::Fuck(error),
     }
 }

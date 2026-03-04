@@ -1,7 +1,8 @@
-use crate::errors::{HowError, Parsers};
-
+use snafu::{OptionExt, location};
 use sqlx::{Decode, Encode, Sqlite, Type, error::BoxDynError};
-use std::fmt::Display;
+use std::fmt::{self, Display, Formatter};
+
+use crate::errors::{OtherSnafu, WrappedError};
 
 pub mod apt;
 pub mod dew;
@@ -13,24 +14,23 @@ pub enum MetaDataKind {
 }
 
 impl MetaDataKind {
-    fn parse(input: &str) -> Result<Self, HowError> {
-        let kind = input.chars().next().ok_or(HowError::ParseError {
-            message: "Missing type identified!".into(),
-            util: Parsers::MetaDataKind,
+    fn parse(input: &str) -> Result<Self, WrappedError> {
+        let kind = input.chars().next().context(OtherSnafu {
+            error: "Missing type identifier!",
         })?;
         match kind as u8 {
             0 => Ok(Self::Dew),
             1 => Ok(Self::Apt),
-            kind => Err(HowError::ParseError {
-                message: format!("Invalid kind identifier `{kind}`!").into(),
-                util: Parsers::MetaDataKind,
+            kind => Err(WrappedError::Other {
+                error: format!("Invalid kind identifier `{kind}`!").into(),
+                loc: location!(),
             }),
         }
     }
 }
 
 impl Display for MetaDataKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Dew => "\x00",
             Self::Apt => "\x01",

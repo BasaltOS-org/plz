@@ -8,7 +8,8 @@ pub mod settings;
 pub mod statebox;
 pub mod utils;
 
-pub fn main() {
+#[tokio::main]
+pub async fn main() {
     let args: Vec<String> = env::args().collect();
     let mut args = args.iter();
     let name = args
@@ -33,9 +34,19 @@ pub fn main() {
             commands::update::build,
             commands::upgrade::build,
         ]),
-        |_command, _args| utils::PostAction::GetHelp,
+        |_, _command, _args| utils::PostAction::GetHelp,
         &[],
     );
     // Run the command with the provided arguments
-    main_command.run(args);
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(error) => {
+            println!("Tokio is not supported on this system. This program cannot run. {error:?}");
+            return;
+        }
+    };
+    commands::Command::run(main_command, &rt, args).await;
 }

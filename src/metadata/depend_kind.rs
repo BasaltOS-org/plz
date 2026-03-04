@@ -1,15 +1,17 @@
-use crate::errors::{HowError, Parsers, SystemSnafu, WhereError};
+use serde::{Deserialize, Serialize};
+use snafu::{OptionExt, location};
+use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type};
+use std::{
+    collections::HashSet,
+    fmt::{self, Display, Formatter},
+};
+
+use crate::errors::{OtherSnafu, Wrapped, WrappedError};
 use crate::metadata::{
-    DepVer, FuckNest, FuckWrap, InstallPackage, Specific, get_installed_metadata,
-    processed::ProcessedMetaData,
+    DepVer, InstallPackage, Specific, get_installed_metadata, processed::ProcessedMetaData,
 };
 use crate::settings::OriginKind;
-use crate::utils::{Range, VerReq, Version, command};
-
-use serde::{Deserialize, Serialize};
-use snafu::OptionExt;
-use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type};
-use std::{collections::HashSet, fmt::Display};
+use crate::utils::{range::Range, verreq::VerReq, version::Version, which};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum DependKind {
@@ -34,8 +36,7 @@ impl DependKind {
             }
             Self::Specific(specific) => Some(specific.clone()),
             Self::Volatile(volatile) => {
-                let result = command("/usr/bin/which", &[volatile], None);
-                if result.is_some_and(|x| x == 0) {
+                if which(volatile) {
                     None
                 } else {
                     Some(DepVer {
@@ -54,17 +55,13 @@ impl DependKind {
         sources: &[OriginKind],
         prior: &mut HashSet<Specific>,
         pool: &SqlitePool,
-    ) -> Result<Vec<InstallPackage>, WhereError> {
+    ) -> Result<Vec<InstallPackage>, WrappedError> {
         let mut result = Vec::new();
         for dep in deps.0.iter() {
             let dep = match dep {
                 Self::Latest(latest) => {
                     ProcessedMetaData::get_metadata(latest, None, sources, true, pool)
                         .await
-                        .context(SystemSnafu {
-                            message: "Discovery failed",
-                            package: latest.to_string(),
-                        })
                         .wrap()?
                 }
                 Self::Specific(dep_ver) => {
@@ -72,7 +69,7 @@ impl DependKind {
                         .clone()
                         .pull_metadata(Some(sources), true, pool)
                         .await
-                        .nest("Pull Package Metadata")?;
+                        .wrap()?;
                     ProcessedMetaData::get_metadata(
                         &specific.name,
                         Some(&specific.version.to_string()),
@@ -81,23 +78,14 @@ impl DependKind {
                         pool,
                     )
                     .await
-                    .context(SystemSnafu {
-                        message: format!("Failed to locate version {}", specific.version),
-                        package: specific.name,
-                    })
                     .wrap()?
                 }
                 Self::Volatile(volatile) => {
-                    let result = command("/usr/bin/which", &[volatile], None);
-                    if result.is_some_and(|x| x == 0) {
+                    if which(volatile) {
                         continue;
                     } else {
                         ProcessedMetaData::get_metadata(volatile, None, sources, true, pool)
                             .await
-                            .context(SystemSnafu {
-                                message: "Volatile discovery failed",
-                                package: volatile.to_string(),
-                            })
                             .wrap()?
                     }
                 }
@@ -110,7 +98,7 @@ impl DependKind {
                 prior.insert(specific);
                 let child = Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior, pool))
                     .await
-                    .nest("Get Package Dependencies")?;
+                    .wrap()?;
                 result.push(child);
             }
         }
@@ -183,8 +171,7 @@ impl DependKind {
                 Err(_) => false,
             },
             Self::Volatile(volatile) => {
-                let result = command("/usr/bin/which", &[volatile], None);
-                if result.is_some_and(|x| x == 0) {
+                if which(volatile) {
                     true
                 } else {
                     match get_installed_metadata(volatile, pool).await {
@@ -202,27 +189,26 @@ impl DependKind {
             Self::Volatile(volatile) => volatile.to_string(),
         }
     }
-    fn parse(input: &str) -> Result<Self, HowError> {
+    fn parse(input: &str) -> Result<Self, WrappedError> {
         let mut chars = input.chars();
-        let kind = chars.next().ok_or(HowError::ParseError {
-            message: "Missing type identifier!".into(),
-            util: Parsers::DependKind,
+        let kind = chars.next().context(OtherSnafu {
+            error: "Missing type identifier!",
         })?;
         let data = chars.collect::<String>();
         match kind as u8 {
             1 => Ok(Self::Latest(data)),
-            2 => Ok(Self::Specific(DepVer::parse(&data)?)),
+            2 => Ok(Self::Specific(DepVer::parse(&data).wrap()?)),
             3 => Ok(Self::Volatile(data)),
-            kind => Err(HowError::ParseError {
-                message: format!("Invalid kind identifier `{kind}`!").into(),
-                util: Parsers::DependKind,
+            kind => Err(WrappedError::Other {
+                error: format!("Invalid kind identifier `{kind}`!").into(),
+                loc: location!(),
             }),
         }
     }
 }
 
 impl Display for DependKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&match self {
             Self::Latest(latest) => format!("\x01{latest}"),
             Self::Specific(specific) => format!("\x02{specific}"),
@@ -235,7 +221,7 @@ impl Display for DependKind {
 pub struct DependKindVec(pub Vec<DependKind>);
 
 impl DependKindVec {
-    fn parse(input: &str) -> Result<Self, HowError> {
+    fn parse(input: &str) -> Result<Self, WrappedError> {
         if input.is_empty() {
             return Ok(Self(Vec::new()));
         }
@@ -248,7 +234,7 @@ impl DependKindVec {
 }
 
 impl Display for DependKindVec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let data = self.0.iter().fold(String::new(), |mut acc, x| {
             if !acc.is_empty() {
                 acc.push('\x00');

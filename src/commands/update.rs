@@ -1,12 +1,11 @@
+use tokio::runtime::Runtime;
+
 use crate::commands::Command;
-use crate::errors::{RuntimeSnafu, WhatError, WhereError};
+use crate::errors::Wrapped;
 use crate::metadata::collect_updates;
 use crate::settings::acquire_lock;
 use crate::statebox::StateBox;
-use crate::utils::{FuckWrap, PostAction};
-
-use snafu::ResultExt;
-use tokio::runtime::Runtime;
+use crate::utils::PostAction;
 
 pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
@@ -20,23 +19,15 @@ pub fn build(hierarchy: &[String]) -> Command {
     )
 }
 
-fn run(_states: &StateBox, _args: Option<&[String]>) -> PostAction {
-    match acquire_lock() {
-        Ok(Some(action)) => return action,
-        Err(source) => {
-            return PostAction::Fuck(WhatError::Update {
-                source: WhereError::WrappedError { source },
-            });
-        }
-        _ => (),
-    }
-    let runtime = match Runtime::new().context(RuntimeSnafu).wrap() {
-        Ok(runtime) => runtime,
-        Err(source) => return PostAction::Fuck(WhatError::Update { source }),
-    };
-    if let Err(source) = runtime.block_on(collect_updates()) {
-        PostAction::Fuck(WhatError::Update { source })
-    } else {
-        PostAction::Return
+fn run(rt: &Runtime, _states: &StateBox, _args: Option<&[String]>) -> PostAction {
+    match rt.block_on(async {
+        if let Some(action) = acquire_lock().await.wrap()? {
+            return Ok(action);
+        };
+        collect_updates().await.wrap()?;
+        Ok(PostAction::Return)
+    }) {
+        Ok(action) => action,
+        Err(error) => PostAction::Fuck(error),
     }
 }

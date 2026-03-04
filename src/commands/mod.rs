@@ -1,3 +1,6 @@
+use tokio::runtime::Runtime;
+
+use crate::errors::{Wrapped, WrappedError};
 use crate::flags::Flag;
 use crate::settings::remove_lock;
 use crate::statebox::StateBox;
@@ -21,6 +24,7 @@ enum HandlerResult {
 
 // Extraction of complex type
 type Subcommand = Option<Vec<fn(parents: &[String]) -> Command>>;
+type MyFunc = fn(rt: &Runtime, states: &StateBox, args: Option<&[String]>) -> PostAction;
 
 pub struct Command {
     pub name: String,
@@ -29,7 +33,7 @@ pub struct Command {
     pub flags: Vec<Flag>,
     pub subcommands: Subcommand,
     states: StateBox,
-    pub run_func: fn(states: &StateBox, args: Option<&[String]>) -> PostAction,
+    pub run_func: MyFunc,
     pub hierarchy: Vec<String>,
 }
 
@@ -48,7 +52,7 @@ impl Command {
         about: &str,
         flags: Vec<Flag>,
         subcommands: Subcommand,
-        run_func: fn(states: &StateBox, args: Option<&[String]>) -> PostAction,
+        run_func: MyFunc,
         hierarchy: &[String],
     ) -> Self {
         Command {
@@ -131,8 +135,7 @@ impl Command {
         help
     }
     // Run the command
-    pub fn run(self, mut raw_args: Iter<'_, String>) {
-        let mut m_self = self;
+    pub async fn run(mut self, rt: &Runtime, mut raw_args: Iter<'_, String>) {
         let mut first_arg = true;
         // store breakpoint
         let mut opr: Option<(usize, Option<String>)> = None;
@@ -140,16 +143,21 @@ impl Command {
         // outer loop over args
         'outer: while let Some(arg) = raw_args.next() {
             if let Some(l_arg) = arg.strip_prefix("--") {
-                match m_self.handle_long_flag(l_arg, &mut raw_args, &mut opr) {
+                match self.handle_long_flag(rt, l_arg, &mut raw_args, &mut opr) {
                     HandlerResult::ContinueOuter => continue 'outer,
                     HandlerResult::ReturnEarly => return,
                 }
             } else if let Some(s_arg) = arg.strip_prefix("-") {
-                match m_self.handle_short_flags(s_arg, &mut raw_args, &mut opr) {
+                match self.handle_short_flags(rt, s_arg, &mut raw_args, &mut opr) {
                     HandlerResult::ContinueOuter => continue 'outer,
                     HandlerResult::ReturnEarly => return,
                 }
-            } else if first_arg && m_self.try_handle_subcommand(arg, &mut raw_args).is_ok() {
+            } else if first_arg
+                && self
+                    .try_handle_subcommand(rt, arg, &mut raw_args)
+                    .await
+                    .is_ok()
+            {
                 return;
             } else {
                 args.push(arg.to_string());
@@ -157,15 +165,22 @@ impl Command {
             first_arg = false;
         }
         if let Some((flag_idx, val)) = opr {
-            let flag = &m_self.flags[flag_idx];
-            (flag.run_func)(&mut m_self.states, val)
+            let flag = &self.flags[flag_idx];
+            (flag.run_func)(rt, &mut self.states, val)
         } else {
-            m_self.handle_post_action((m_self.run_func)(&m_self.states, Some(&args)));
+            if let Err(e) = self
+                .handle_post_action((self.run_func)(rt, &self.states, Some(&args)))
+                .await
+                .wrap()
+            {
+                println!("{e:?}")
+            };
         }
     }
 
     fn handle_long_flag(
         &mut self,
+        rt: &Runtime,
         l_arg: &str,
         args: &mut Iter<'_, String>,
         opr: &mut Option<(usize, Option<String>)>,
@@ -191,7 +206,7 @@ impl Command {
                             }
                             *opr = Some((i, val));
                         } else {
-                            (flag.run_func)(&mut self.states, val)
+                            (flag.run_func)(rt, &mut self.states, val)
                         }
                         return HandlerResult::ContinueOuter;
                     }
@@ -205,6 +220,7 @@ impl Command {
 
     fn handle_short_flags(
         &mut self,
+        rt: &Runtime,
         s_arg: &str,
         args: &mut Iter<'_, String>,
         opr: &mut Option<(usize, Option<String>)>,
@@ -230,7 +246,7 @@ impl Command {
                                 }
                                 *opr = Some((i, val));
                             } else {
-                                (flag.run_func)(&mut self.states, val)
+                                (flag.run_func)(rt, &mut self.states, val)
                             }
                             continue 'mid;
                         }
@@ -244,18 +260,23 @@ impl Command {
         HandlerResult::ContinueOuter
     }
 
-    fn try_handle_subcommand(&self, arg: &str, args: &mut Iter<'_, String>) -> Result<(), ()> {
+    async fn try_handle_subcommand(
+        &self,
+        rt: &Runtime,
+        arg: &str,
+        args: &mut Iter<'_, String>,
+    ) -> Result<(), ()> {
         let parents = &self.compile_parents();
         if let Some(subcommands) = &self.subcommands {
             for command in subcommands {
                 let command = (command)(parents);
                 if command.name == *arg {
-                    command.run(args.clone());
+                    Box::pin(command.run(rt, args.clone())).await;
                     return Ok(());
                 } else {
                     for alias in &command.aliases {
                         if alias == arg {
-                            command.run(args.clone());
+                            Box::pin(command.run(rt, args.clone())).await;
                             return Ok(());
                         }
                     }
@@ -277,8 +298,8 @@ impl Command {
         }
     }
 
-    fn handle_post_action(&self, action: PostAction) {
-        let _ = remove_lock();
+    async fn handle_post_action(&self, action: PostAction) -> Result<(), WrappedError> {
+        remove_lock().await.wrap()?;
         match action {
             PostAction::Elevate => {
                 println!(
@@ -321,7 +342,7 @@ impl Command {
                                 .is_ok_and(|x| x.code() == Some(0))
                             {
                                 println!("Failed to re-execute!");
-                                return;
+                                return Ok(());
                             }
                             let mut cmd = RunCommand::new(program);
                             match cmd.args(args).status() {
@@ -337,5 +358,6 @@ impl Command {
             }
             PostAction::Return => (),
         }
+        Ok(())
     }
 }

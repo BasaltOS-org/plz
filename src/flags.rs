@@ -1,4 +1,8 @@
+use tokio::runtime::Runtime;
+
 use crate::statebox::StateBox;
+
+type MyFunc = fn(rt: &Runtime, parent: &mut StateBox, flag: Option<String>);
 
 pub struct Flag {
     pub short: Option<char>,
@@ -6,7 +10,7 @@ pub struct Flag {
     pub about: String,
     pub consumer: bool,
     pub breakpoint: bool,
-    pub run_func: fn(parent: &mut StateBox, flag: Option<String>),
+    pub run_func: MyFunc,
 }
 
 impl PartialEq for Flag {
@@ -23,7 +27,7 @@ impl Flag {
         about: &str,
         consumer: bool,
         breakpoint: bool,
-        run_func: fn(parent: &mut StateBox, flag: Option<String>),
+        run_func: MyFunc,
     ) -> Self {
         Flag {
             short,

@@ -1,17 +1,15 @@
-use crate::errors::{HowError, IOAction, IOSnafu, JSONSnafu, Parsers};
-use crate::utils::{PostAction, get_dir, is_root};
-
 use serde::{Deserialize, Serialize};
-use snafu::ResultExt;
+use snafu::{OptionExt, ResultExt, location};
 use sqlx::{Decode, Encode, Sqlite, Type};
-use std::{
-    fmt::Display,
+use std::{fmt::Display, io::Write, path::PathBuf, thread::sleep};
+use tokio::{
     fs::File,
-    io::{ErrorKind, Read, Write},
-    path::PathBuf,
-    thread::sleep,
+    io::{AsyncReadExt, AsyncWriteExt},
     time::Duration,
 };
+
+use crate::errors::{JSONSnafu, OtherSnafu, TokioIOSnafu, Wrapped, WrappedError};
+use crate::utils::{PostAction, get_dir, is_root};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct SettingsJson {
@@ -64,30 +62,24 @@ impl SettingsJson {
             sources: Vec::new(),
         }
     }
-    pub fn set_settings(self) -> Result<(), HowError> {
-        let loc = "SettingsJSON";
-        let mut file = File::create(affirm_path()?).context(IOSnafu {
-            action: IOAction::CreateFile,
-            loc,
-        })?;
-        let settings = serde_json::to_string(&self).context(JSONSnafu { loc })?;
-        file.write_all(settings.as_bytes()).context(IOSnafu {
-            action: IOAction::WriteFile,
-            loc,
-        })
+    pub async fn set_settings(self) -> Result<(), WrappedError> {
+        let mut file = File::create(affirm_path().await.wrap()?)
+            .await
+            .context(TokioIOSnafu)?;
+        let settings = serde_json::to_string(&self).context(JSONSnafu)?;
+        file.write_all(settings.as_bytes())
+            .await
+            .context(TokioIOSnafu)
     }
-    pub fn get_settings() -> Result<Self, HowError> {
-        let loc = "SettingsJSON";
-        let mut file = File::open(affirm_path()?).context(IOSnafu {
-            action: IOAction::OpenFile,
-            loc,
-        })?;
+    pub async fn get_settings() -> Result<Self, WrappedError> {
+        let mut file = File::open(affirm_path().await.wrap()?)
+            .await
+            .context(TokioIOSnafu)?;
         let mut sources = String::new();
-        file.read_to_string(&mut sources).context(IOSnafu {
-            action: IOAction::ReadFile,
-            loc,
-        })?;
-        serde_json::from_str(&sources).context(JSONSnafu { loc: "JSON" })
+        file.read_to_string(&mut sources)
+            .await
+            .context(TokioIOSnafu)?;
+        serde_json::from_str(&sources).context(JSONSnafu)
     }
 }
 
@@ -112,27 +104,24 @@ pub enum OriginKind {
 }
 
 impl OriginKind {
-    fn parse(input: &str) -> Result<Self, HowError> {
+    fn parse(input: &str) -> Result<Self, WrappedError> {
         let mut chars = input.chars();
-        let kind = chars.next().ok_or(HowError::ParseError {
-            message: "Missing type identifier!".into(),
-            util: Parsers::OriginKind,
+        let kind = chars.next().ok_or(WrappedError::Other {
+            error: "Missing type identifier!".into(),
+            loc: location!(),
         })?;
         let data = chars.collect::<String>();
         match kind as u8 {
             0 => {
                 let mut splits = data.split(' ');
-                let source = splits.next().ok_or(HowError::ParseError {
-                    message: "Missing APT field `source`!".into(),
-                    util: Parsers::OriginKind,
+                let source = splits.next().context(OtherSnafu {
+                    error: "Missing APT field `source`!",
                 })?;
-                let code = splits.next().ok_or(HowError::ParseError {
-                    message: "Missing APT field `code`!".into(),
-                    util: Parsers::OriginKind,
+                let code = splits.next().context(OtherSnafu {
+                    error: "Missing APT field `code`!",
                 })?;
-                let kind = splits.next().ok_or(HowError::ParseError {
-                    message: "Missing APT field `kind`!".into(),
-                    util: Parsers::OriginKind,
+                let kind = splits.next().context(OtherSnafu {
+                    error: "Missing APT field `kind`!",
                 })?;
                 let kind = match kind {
                     "main" => AptKind::Main,
@@ -149,18 +138,17 @@ impl OriginKind {
             }
             1 => Ok(Self::Dew(data.to_string())),
             2 => {
-                let (user, repo) = data.split_once(' ').ok_or(HowError::ParseError {
-                    message: "Missing GH field `repo`!".into(),
-                    util: Parsers::OriginKind,
+                let (user, repo) = data.split_once(' ').context(OtherSnafu {
+                    error: "Missing GH field `repo`!",
                 })?;
                 Ok(Self::Github {
                     user: user.to_string(),
                     repo: repo.to_string(),
                 })
             }
-            kind => Err(HowError::ParseError {
-                message: format!("Invalid kind identifier `{kind}`!").into(),
-                util: Parsers::OriginKind,
+            kind => Err(WrappedError::Other {
+                error: format!("Invalid kind identifier `{kind}`!").into(),
+                loc: location!(),
             }),
         }
     }
@@ -244,53 +232,50 @@ pub enum Arch {
 }
 
 impl Arch {
-    pub fn is_compatible(&self, name: &str) -> Result<bool, HowError> {
-        let installed = SettingsJson::get_settings()?.arch;
+    pub async fn is_compatible(&self, name: &str) -> Result<bool, WrappedError> {
+        let installed = SettingsJson::get_settings().await.wrap()?.arch;
         match self {
             Self::Any => Ok(true),
             Self::X86_64v1 => Ok([Self::X86_64v1, Self::X86_64v3].contains(&installed)),
-            Self::NoArch => Err(HowError::SystemError {
-                message: "Unrecognized architecture".into(),
-                package: name.to_string().into(),
+            Self::NoArch => Err(WrappedError::Other {
+                error: format!("Unrecognized architecture in package {name}!").into(),
+                loc: location!(),
             }),
             other => Ok(installed == *other),
         }
     }
 }
 
-fn affirm_path() -> Result<PathBuf, HowError> {
-    let mut path = get_dir()?;
+async fn affirm_path() -> Result<PathBuf, WrappedError> {
+    let mut path = get_dir().await.wrap()?;
     path.push("settings.json");
     if !path.exists() {
-        let mut file = File::create(&path).context(IOSnafu {
-            action: IOAction::CreateFile,
-            loc: "SettingsJSON",
-        })?;
-        let new_settings = serde_json::to_string(&SettingsJson::new()).context(JSONSnafu {
-            loc: "SettingsJSON",
-        })?;
+        let mut file = File::create(&path).await.context(TokioIOSnafu)?;
+        let new_settings = serde_json::to_string(&SettingsJson::new()).context(JSONSnafu)?;
 
-        file.write_all(new_settings.as_bytes()).context(IOSnafu {
-            action: IOAction::WriteFile,
-            loc: "SettingsJSON",
-        })?;
+        file.write_all(new_settings.as_bytes())
+            .await
+            .context(TokioIOSnafu)?;
         Ok(path)
     } else if path.is_file() {
         Ok(path)
     } else {
-        Err(HowError::IOError {
-            source: ErrorKind::NotSeekable.into(),
-            action: IOAction::AssertPath,
-            loc: path.display().to_string().into(),
+        Err(WrappedError::Other {
+            error: format!(
+                "Path {} is not of the expected type. Is it a real file?",
+                path.display()
+            )
+            .into(),
+            loc: location!(),
         })
     }
 }
 
-pub fn acquire_lock() -> Result<Option<PostAction>, HowError> {
+pub async fn acquire_lock() -> Result<Option<PostAction>, WrappedError> {
     if !is_root() {
         return Ok(Some(PostAction::Elevate));
     }
-    let mut settings = SettingsJson::get_settings()?;
+    let mut settings = SettingsJson::get_settings().await.wrap()?;
     loop {
         if settings.locked {
             for i in 0..20 {
@@ -334,7 +319,7 @@ pub fn acquire_lock() -> Result<Option<PostAction>, HowError> {
                 sleep(Duration::from_millis(50));
             }
             println!("\x1B[2K\r\x1B[92mAwaiting program lock. Retrying now\x1B[0m...");
-            settings = SettingsJson::get_settings()?;
+            settings = SettingsJson::get_settings().await.wrap()?;
         } else {
             break;
         }
@@ -343,16 +328,12 @@ pub fn acquire_lock() -> Result<Option<PostAction>, HowError> {
         return Ok(Some(PostAction::PullSources));
     }
     settings.locked = true;
-    settings.set_settings()?;
+    settings.set_settings().await.wrap()?;
     Ok(None)
 }
 
-pub fn remove_lock() -> Result<(), HowError> {
-    let mut settings = SettingsJson::get_settings()?;
+pub async fn remove_lock() -> Result<(), WrappedError> {
+    let mut settings = SettingsJson::get_settings().await.wrap()?;
     settings.locked = false;
-    settings.set_settings()
-}
-
-pub trait FuckExt<T, E>: Sized {
-    fn wrap<E2: From<HowError>>(self, loc: &'static str) -> Result<T, E2>;
+    settings.set_settings().await.wrap()
 }

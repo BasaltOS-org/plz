@@ -1,16 +1,19 @@
-use crate::errors::{HowError, Parsers, SQLSnafu, SystemSnafu, WhereError};
+use serde::{Deserialize, Serialize};
+use snafu::{OptionExt, ResultExt, location};
+use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type, query, query_as};
+use std::{
+    fmt::{self, Display, Formatter},
+    process::Command,
+};
+
+use crate::errors::{OtherSnafu, SQLSnafu, Wrapped, WrappedError};
 use crate::metadata::{
-    FuckNest, FuckWrap, QueuedChanges, get_installed_metadata,
+    QueuedChanges, get_installed_metadata,
     installed::{InstalledInstallKind, InstalledMetaData},
     processed::ProcessedMetaData,
 };
 use crate::settings::{OriginKind, SettingsJson};
-use crate::utils::{Range, VerReq, Version, get_pool};
-
-use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, location};
-use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type, query, query_as};
-use std::{fmt::Display, process::Command};
+use crate::utils::{get_pool, range::Range, verreq::VerReq, version::Version};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DepVer {
@@ -19,15 +22,16 @@ pub struct DepVer {
 }
 
 impl DepVer {
-    pub async fn get_installed_specific(&self, pool: &SqlitePool) -> Result<Specific, WhereError> {
+    pub async fn get_installed_specific(
+        &self,
+        pool: &SqlitePool,
+    ) -> Result<Specific, WrappedError> {
         let metadata = InstalledMetaData::open(&self.name, pool)
             .await
-            .nest("Locate Package Metadata")?
-            .context(SystemSnafu {
-                message: "Discovery failed",
-                package: self.name.to_string(),
-            })
-            .wrap()?;
+            .wrap()?
+            .context(OtherSnafu {
+                error: format!("Failed to locate `{}`!", self.name),
+            })?;
         Ok(Specific {
             name: metadata.name,
             version: Version::parse(&metadata.version).wrap()?,
@@ -38,10 +42,10 @@ impl DepVer {
         sources: Option<&[OriginKind]>,
         dependent: bool,
         pool: &SqlitePool,
-    ) -> Result<ProcessedMetaData, WhereError> {
+    ) -> Result<ProcessedMetaData, WrappedError> {
         let sources = match sources {
             Some(sources) => sources,
-            None => &SettingsJson::get_settings().wrap()?.sources,
+            None => &SettingsJson::get_settings().await.wrap()?.sources,
         };
         let mut versions = None;
         let mut g_source = None;
@@ -70,27 +74,31 @@ impl DepVer {
                     // thingy
                     println!("Github is not implemented yet!");
                 }
-                OriginKind::Apt { .. } => return Err(WhereError::debug(location!())),
+                OriginKind::Apt { .. } => {
+                    return Err(WrappedError::Other {
+                        error: "debug breakpoint".into(),
+                        loc: location!(),
+                    });
+                }
             }
         }
-        let (Some(mut versions), Some(source)) = (versions, g_source) else {
-            return Err(HowError::SystemError {
-                message: "Discovery failed".into(),
-                package: name.into(),
-            })
-            .wrap();
-        };
+        let (mut versions, source) = (versions.zip(g_source)).context(OtherSnafu {
+            error: format!("Failed to locate `{name}`!"),
+        })?;
+
         match &self.range.lower {
             VerReq::Gt(gt) => versions.retain(|x| x > gt),
             VerReq::Ge(ge) => versions.retain(|x| x >= ge),
             VerReq::Eq(eq) => versions.retain(|x| x == eq),
             VerReq::NoBound => (),
             fuck => {
-                return Err(HowError::SystemError {
-                    message: format!("Unexpected `lower` version requirement of {fuck:?}",).into(),
-                    package: name.into(),
-                })
-                .wrap();
+                return Err(WrappedError::Other {
+                    error: format!(
+                        "Unexpected `lower` version requirement of {fuck:?} for package `{name}`.",
+                    )
+                    .into(),
+                    loc: location!(),
+                });
             }
         };
         match &self.range.upper {
@@ -98,31 +106,28 @@ impl DepVer {
             VerReq::Lt(lt) => versions.retain(|x| x < lt),
             VerReq::Eq(_) | VerReq::NoBound => (),
             fuck => {
-                return Err(HowError::SystemError {
-                    message: format!("Unexpected `upper` version requirement of {fuck:?}",).into(),
-                    package: name.into(),
-                })
-                .wrap();
+                return Err(WrappedError::Other {
+                    error: format!(
+                        "Unexpected `upper` version requirement of {fuck:?} for package `{name}`.",
+                    )
+                    .into(),
+                    loc: location!(),
+                });
             }
         };
         versions.sort();
-        let Some(ver) = versions.last().map(|x| x.to_string()) else {
-            return Err(WhereError::debug(location!()));
-        };
+        let ver = versions.last().map(|x| x.to_string()).context(OtherSnafu {
+            error: "debug breakpoint",
+        })?;
         ProcessedMetaData::get_metadata(&name, Some(&ver), &[source], dependent, pool)
             .await
-            .context(SystemSnafu {
-                message: format!("Failed to locate version {ver}"),
-                package: name,
-            })
             .wrap()
     }
-    pub fn parse(input: &str) -> Result<Self, HowError> {
-        let (name, range) = input.split_once(' ').ok_or(HowError::ParseError {
-            message: "Missing DepVer field `range`!".into(),
-            util: Parsers::DepVer,
+    pub fn parse(input: &str) -> Result<Self, WrappedError> {
+        let (name, range) = input.split_once(' ').context(OtherSnafu {
+            error: "Missing DepVer field `range`!",
         })?;
-        let range = Range::parse(range)?;
+        let range = Range::parse(range).wrap()?;
         Ok(Self {
             name: name.to_string(),
             range,
@@ -131,7 +136,7 @@ impl DepVer {
 }
 
 impl Display for DepVer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&format!("{} {}", self.name, self.range))
     }
 }
@@ -140,7 +145,7 @@ impl Display for DepVer {
 pub struct DepVerVec(pub Vec<DepVer>);
 
 impl DepVerVec {
-    fn parse(input: &str) -> Result<Self, HowError> {
+    fn parse(input: &str) -> Result<Self, WrappedError> {
         if input.is_empty() {
             return Ok(Self(Vec::new()));
         }
@@ -153,7 +158,7 @@ impl DepVerVec {
 }
 
 impl Display for DepVerVec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let data = self.0.iter().fold(String::new(), |mut acc, x| {
             if !acc.is_empty() {
                 acc.push_str("\x00\x00");
@@ -213,14 +218,13 @@ impl Specific {
         their_name: &str,
         their_ver: &str,
         pool: &SqlitePool,
-    ) -> Result<(), WhereError> {
+    ) -> Result<(), WrappedError> {
         let mut data =
             query_as::<Sqlite, InstalledMetaData>("SELECT * FROM installed WHERE name = ?")
                 .bind(&self.name)
                 .fetch_one(pool)
                 .await
-                .context(SQLSnafu)
-                .wrap()?;
+                .context(SQLSnafu)?;
         if data.version == self.version.to_string() {
             let their_dep = Self {
                 name: their_name.to_string(),
@@ -244,8 +248,7 @@ impl Specific {
                 .bind(data.name)
                 .execute(pool)
                 .await
-                .context(SQLSnafu)
-                .wrap()?;
+                .context(SQLSnafu)?;
         }
         Ok(())
         // let (path, data) = get_metadata_path(&self.name)?;
@@ -273,7 +276,7 @@ impl Specific {
         //         })
         //         .wrap()
         // } else {
-        //     Err(HowError::SystemError {
+        //     Err(WrappedError::SystemError {
         //         message: format!("Failed to find data for dependency `{}`", self.name).into(),
         //         package: their_name.to_string().into(),
         //     })
@@ -284,42 +287,44 @@ impl Specific {
         &self,
         queued: &mut QueuedChanges,
         pool: &SqlitePool,
-    ) -> Result<(), WhereError> {
+    ) -> Result<(), WrappedError> {
         let data = InstalledMetaData::open(&self.name, pool)
             .await
-            .nest("Locate Package Metadata")?
-            .context(SystemSnafu {
-                message: "Discovery failed",
-                package: self.name.to_string(),
-            })
-            .wrap()?;
+            .wrap()?
+            .context(OtherSnafu {
+                error: format!("Failed to locate package `{}`!", self.name),
+            })?;
         if data.version == self.version.to_string() {
             for dependent in &data.dependents.0 {
                 if queued.insert_primary(dependent.clone()) {
                     Box::pin(dependent.get_dependents(queued, pool))
                         .await
-                        .nest("Get Package Dependents")?;
+                        // .context(OtherSnafu {
+                        //     error: format!("Nested loop for package {}", self.name),
+                        // })
+                        .wrap_with(format!("Nested loop for package `{}`", self.name).into())?;
                 }
             }
             Ok(())
         } else {
-            Err(HowError::SystemError {
-                message: format!("Version {} not found", self.version).into(),
-                package: self.name.to_string().into(),
+            Err(WrappedError::Other {
+                error: format!(
+                    "Version {} not found for package `{}`",
+                    self.version, self.name
+                )
+                .into(),
+                loc: location!(),
             })
-            .wrap()
         }
     }
-    pub async fn remove(&self, purge: bool, pool: Option<&SqlitePool>) -> Result<(), WhereError> {
+    pub async fn remove(&self, purge: bool, pool: Option<&SqlitePool>) -> Result<(), WrappedError> {
         let msg = if purge { "Purging" } else { "Removing" };
         let pool = match pool {
             Some(pool) => pool,
-            None => &get_pool().await.nest("Get Sqlite Pool")?,
+            None => &get_pool().await.wrap()?,
         };
-        println!("{} {} version {}...", msg, self.name, self.version);
-        let data = get_installed_metadata(&self.name, pool)
-            .await
-            .nest("Get Installed Metadata")?;
+        println!("{} `{}` version {}...", msg, self.name, self.version);
+        let data = get_installed_metadata(&self.name, pool).await.wrap()?;
         let Some(data) = data else {
             // Since packages are interlinked, chances are another package
             // has already removed this one, and therefore we are just holding
@@ -338,16 +343,15 @@ impl Specific {
             let Ok(dep) = dep.get_installed_specific(pool).await else {
                 continue;
             };
-            data.clear_dependencies(&dep, pool)
-                .await
-                .nest("Remove Dependency from Package")?;
-            Box::pin(dep.remove(purge, Some(pool)))
-                .await
-                .nest("Remove/Purge Package")?;
+            data.clear_dependencies(&dep, pool).await.wrap()?;
+            Box::pin(dep.remove(purge, Some(pool))).await.wrap()?;
         }
         match data.install_kind {
             InstalledInstallKind::PreBuilt(_) => {
-                return Err(WhereError::debug(location!())); //thingy
+                return Err(WrappedError::Other {
+                    error: "debug breakpoint".into(),
+                    loc: location!(),
+                }); //thingy
             }
             InstalledInstallKind::Compilable(compilable) => {
                 // I'm not sure if the `purge` script is run IN PLACE OF, or
@@ -364,11 +368,10 @@ impl Specific {
                     .status()
                     .is_ok_and(|x| x.code() == Some(0))
                 {
-                    return Err(HowError::SystemError {
-                        message: format!("{msg} failed").into(),
-                        package: self.name.to_string().into(),
-                    })
-                    .wrap()?;
+                    return Err(WrappedError::Other {
+                        error: format!("{msg} failed for package `{}`!", self.name).into(),
+                        loc: location!(),
+                    })?;
                 }
             }
         }
@@ -376,8 +379,7 @@ impl Specific {
             .bind(&self.name)
             .execute(pool)
             .await
-            .context(SQLSnafu)
-            .wrap()?;
+            .context(SQLSnafu)?;
         Ok(())
         // fs::remove_file(&path)
         //     .context(IOSnafu {
@@ -386,12 +388,11 @@ impl Specific {
         //     })
         //     .wrap()
     }
-    fn parse(input: &str) -> Result<Self, HowError> {
-        let (name, version) = input.split_once(' ').ok_or(HowError::ParseError {
-            message: "Missing Specific field `version`!".into(),
-            util: Parsers::Specific,
+    fn parse(input: &str) -> Result<Self, WrappedError> {
+        let (name, version) = input.split_once(' ').context(OtherSnafu {
+            error: "Missing Specific field `version`!",
         })?;
-        let version = Version::parse(version)?;
+        let version = Version::parse(version).wrap()?;
         Ok(Self {
             name: name.to_string(),
             version,
@@ -400,7 +401,7 @@ impl Specific {
 }
 
 impl Display for Specific {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&format!("{} {}", self.name, self.version))
     }
 }
@@ -409,20 +410,20 @@ impl Display for Specific {
 pub struct SpecificVec(pub Vec<Specific>);
 
 impl SpecificVec {
-    fn parse(input: &str) -> Result<Self, HowError> {
+    fn parse(input: &str) -> Result<Self, WrappedError> {
         if input.is_empty() {
             return Ok(Self(Vec::new()));
         }
         let mut vers = Vec::new();
         for ver in input.split('\x00') {
-            vers.push(Specific::parse(ver)?);
+            vers.push(Specific::parse(ver).wrap()?);
         }
         Ok(Self(vers))
     }
 }
 
 impl Display for SpecificVec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let data = self.0.iter().fold(String::new(), |mut acc, x| {
             if !acc.is_empty() {
                 acc.push('\x00');

@@ -1,15 +1,16 @@
-use crate::errors::{HowError, Parsers, SQLSnafu, SystemSnafu, WhereError};
+use serde::{Deserialize, Serialize};
+use snafu::{OptionExt, ResultExt, location};
+use sqlx::{Decode, Encode, FromRow, Sqlite, SqlitePool, Type, query, query_as};
+use std::fmt::{self, Display, Formatter};
+
+use crate::errors::{OtherSnafu, SQLSnafu, Wrapped, WrappedError};
 use crate::metadata::{
-    FuckNest, FuckWrap, MetaDataKind, Specific,
+    MetaDataKind, Specific,
     processed::PreBuilt,
     versioning::{DepVerVec, SpecificVec},
 };
 use crate::settings::OriginKind;
 
-use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt};
-use sqlx::{Decode, Encode, FromRow, Sqlite, SqlitePool, Type, query, query_as};
-use std::fmt::Display;
 #[derive(Clone, Debug, Encode, FromRow, PartialEq)]
 pub struct InstalledMetaData {
     pub name: String,
@@ -24,15 +25,14 @@ pub struct InstalledMetaData {
 }
 
 impl InstalledMetaData {
-    pub async fn open(name: &str, pool: &SqlitePool) -> Result<Option<Self>, WhereError> {
+    pub async fn open(name: &str, pool: &SqlitePool) -> Result<Option<Self>, WrappedError> {
         query_as::<Sqlite, Self>("SELECT * FROM installed WHERE name = ?")
             .bind(name)
             .fetch_optional(pool)
             .await
             .context(SQLSnafu)
-            .wrap()
     }
-    pub async fn write(self, pool: &SqlitePool) -> Result<Option<Self>, WhereError> {
+    pub async fn write(self, pool: &SqlitePool) -> Result<Option<Self>, WrappedError> {
         query::<Sqlite>("INSERT INTO installed VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(&self.name)
             .bind(&self.kind)
@@ -53,7 +53,7 @@ impl InstalledMetaData {
         &self,
         specific: &Specific,
         pool: &SqlitePool,
-    ) -> Result<(), WhereError> {
+    ) -> Result<(), WrappedError> {
         let mut data = self.clone();
         // let index = &data
         //     .dependencies
@@ -81,17 +81,15 @@ impl InstalledMetaData {
                     break;
                 }
             }
-            e_index
-                .context(SystemSnafu {
-                    message: format!("Dependent `{}` {} not found", data.name, data.version),
-                    package: specific.name.to_string(),
-                })
-                .wrap()?
+            e_index.context(OtherSnafu {
+                error: format!(
+                    "Dependent `{}` {} not found for package `{}`!",
+                    data.name, data.version, specific.name
+                ),
+            })?
         };
         data.dependencies.0.remove(index);
-        data.write(pool)
-            .await
-            .nest("Write Changes to Package Metadata")?;
+        data.write(pool).await.wrap()?;
         Ok(())
     }
 }
@@ -103,19 +101,18 @@ pub enum InstalledInstallKind {
 }
 
 impl InstalledInstallKind {
-    fn parse(input: &str) -> Result<Self, HowError> {
+    fn parse(input: &str) -> Result<Self, WrappedError> {
         let mut chars = input.chars();
-        let kind = chars.next().ok_or(HowError::ParseError {
-            message: "Missing type identifier!".into(),
-            util: Parsers::InstalledInstallKind,
+        let kind = chars.next().context(OtherSnafu {
+            error: "Missing type identifier!",
         })?;
         let data = chars.collect::<String>();
         match kind as u8 {
-            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data)?)),
-            1 => Ok(Self::Compilable(InstalledCompilable::parse(&data)?)),
-            kind => Err(HowError::ParseError {
-                message: format!("Invalid kind identifier `{kind}`!").into(),
-                util: Parsers::InstalledInstallKind,
+            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap()?)),
+            1 => Ok(Self::Compilable(InstalledCompilable::parse(&data).wrap()?)),
+            kind => Err(WrappedError::Other {
+                error: format!("Invalid kind identifier `{kind}`!").into(),
+                loc: location!(),
             }),
         }
     }
@@ -155,7 +152,7 @@ impl<'a> Decode<'a, Sqlite> for InstalledInstallKind {
 }
 
 impl Display for InstalledInstallKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&match self {
             Self::PreBuilt(prebuilt) => format!("\x00{prebuilt}"),
             Self::Compilable(compilable) => format!("\x01{compilable}"),
@@ -170,10 +167,9 @@ pub struct InstalledCompilable {
 }
 
 impl InstalledCompilable {
-    fn parse(input: &str) -> Result<Self, HowError> {
-        let (uninstall, purge) = input.split_once('\x00').ok_or(HowError::ParseError {
-            message: "Missing InstalledCompilable field `purge`!".into(),
-            util: Parsers::InstalledCompilable,
+    fn parse(input: &str) -> Result<Self, WrappedError> {
+        let (uninstall, purge) = input.split_once('\x00').context(OtherSnafu {
+            error: "Missing InstalledCompilable field `purge`!",
         })?;
         Ok(Self {
             uninstall: uninstall.to_string(),
@@ -183,7 +179,7 @@ impl InstalledCompilable {
 }
 
 impl Display for InstalledCompilable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&format!("{}\x00{}", self.uninstall, self.purge))
     }
 }
