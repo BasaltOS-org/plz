@@ -1,4 +1,4 @@
-# Dew Package Manager (Rust)
+# Plz Package Manager (Rust)
 
 ## Structure
 

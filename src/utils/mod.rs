@@ -22,9 +22,10 @@ pub enum PostAction {
     Return,
 }
 
+const LOC_DIR: &str = "/etc/plz";
+
 pub async fn get_dir() -> Result<PathBuf, WrappedError> {
-    let loc = "/etc/dew";
-    let path = PathBuf::from(loc);
+    let path = PathBuf::from(LOC_DIR);
     DirBuilder::new()
         .recursive(true)
         .create(&path)
@@ -147,7 +148,7 @@ pub async fn command(name: &str, args: &[&str], pwd: Option<&str>) -> Option<i32
 }
 
 pub async fn get_pool() -> Result<SqlitePool, WrappedError> {
-    let path = PathBuf::from("/etc/dew/data.db");
+    let path = PathBuf::from(format!("{LOC_DIR}/data.db"));
     let options = SqliteConnectOptions::from_str(&path.to_string_lossy())
         .context(SQLSnafu)?
         .create_if_missing(true);
@@ -184,7 +185,7 @@ pub async fn get_apt_pool(
     code: &str,
     kind: &str,
 ) -> Result<SqlitePool, WrappedError> {
-    let path = PathBuf::from("/etc/dew/apt.db");
+    let path = PathBuf::from(format!("{LOC_DIR}/apt.db"));
     let options = SqliteConnectOptions::from_str(&path.to_string_lossy())
         .context(SQLSnafu)?
         .create_if_missing(true);

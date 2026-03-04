@@ -20,7 +20,7 @@ pub fn build(hierarchy: &[String]) -> Command {
     Command::new(
         "configure",
         vec![String::from("c")],
-        "Configures internal dew settings.",
+        "Configures internal PLZ settings.",
         vec![setting, yes_flag()],
         None,
         |_, _, _| PostAction::GetHelp,

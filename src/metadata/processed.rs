@@ -14,7 +14,7 @@ use crate::metadata::{
     depend_kind::DependKindVec,
     get_installed_metadata,
     installed::{InstalledCompilable, InstalledInstallKind},
-    parsers::{apt::RawApt, dew::RawDew},
+    parsers::{apt::RawApt, plz::RawPlz},
     versioning::{self, SpecificVec},
 };
 use crate::settings::{Arch, OriginKind};
@@ -237,7 +237,7 @@ impl ProcessedMetaData {
         let tmpfile = tmpfile().await.wrap()?;
         let mut file = File::create(&tmpfile.0).await.context(TokioIOSnafu)?;
         let endpoint = match self.origin {
-            OriginKind::Dew(dew) => format!("{dew}?v={}", self.version),
+            OriginKind::Plz(plz) => format!("{plz}?v={}", self.version),
             OriginKind::Github { .. } => {
                 return Err(WrappedError::Other {
                     error: "debug breakpoint".into(),
@@ -377,7 +377,7 @@ impl ProcessedMetaData {
         });
         for source in sources {
             match source {
-                OriginKind::Dew(source) => {
+                OriginKind::Plz(source) => {
                     // metadata = {
                     let endpoint = if let Some(version) = version {
                         format!("{source}/packages/metadata/{name}?v={version}")
@@ -390,11 +390,11 @@ impl ProcessedMetaData {
                         .text()
                         .await
                         .context(NetSnafu)?;
-                    if let Ok(raw_dew) = serde_json::from_str::<RawDew>(&body) {
-                        metadata = raw_dew.to_process(dependent);
+                    if let Ok(rawplz) = serde_json::from_str::<RawPlz>(&body) {
+                        metadata = rawplz.to_process(dependent);
                         break;
                     }
-                    //     && let Some(processed) = raw_dew.process()
+                    //     && let Some(processed) = rawplz.process()
                     // {
                     //     Some(processed)
                     // } else {

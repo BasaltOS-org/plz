@@ -14,7 +14,7 @@
       in rec {
         rustc = pkgs.rustc;
 
-        dew = pkgs.rustPlatform.buildRustPackage {
+        plz = pkgs.rustPlatform.buildRustPackage {
           pname = pkgName;
           version = pkgVersion;
           src = pkgs.lib.cleanSource ./.;
@@ -35,9 +35,9 @@
         };
 
         packages = {
-          default = dew;
+          default = plz;
         };
-        defaultPackage = dew;
+        defaultPackage = plz;
 
         devShells = {
           default = pkgs.mkShell {
@@ -50,7 +50,7 @@
               sccache
             ];
             shellHook = ''
-              dew = ./target/debug/dew
+              plz = ./target/debug/plz
             '';
           };
         };

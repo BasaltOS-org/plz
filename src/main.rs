@@ -17,18 +17,18 @@ pub async fn main() {
         .map(|arg| Path::new(arg).file_name().map(|x| x.to_str()))
         .unwrap_or(None)
         .unwrap_or(None)
-        .unwrap_or("dew");
+        .unwrap_or("plz");
     // Main command
     let main_command = commands::Command::new(
         name,
         Vec::new(),
-        "The DEW package manager.",
+        "The PLZ package manager.",
         vec![],
         Some(vec![
             commands::configure::build,
             commands::unbind::build,
             commands::install::build,
-            commands::dew_init::build,
+            commands::plz_init::build,
             commands::remove::build_purge,
             commands::remove::build_remove,
             commands::update::build,

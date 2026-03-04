@@ -10,7 +10,7 @@ use crate::metadata::{
 use crate::settings::OriginKind;
 use crate::utils::{range::Range, verreq::VerReq, version::Version};
 #[derive(Debug, Deserialize)]
-pub struct RawDew {
+pub struct RawPlz {
     name: String,
     description: String,
     version: String,
@@ -24,7 +24,7 @@ pub struct RawDew {
     hash: String,
 }
 
-impl RawDew {
+impl RawPlz {
     pub fn to_process(self, dependent: bool) -> Result<ProcessedMetaData, WrappedError> {
         let origin = if self.origin.starts_with("gh/") {
             let split = self
@@ -50,7 +50,7 @@ impl RawDew {
         //     return None;
         // };
         } else {
-            OriginKind::Dew(self.origin.clone())
+            OriginKind::Plz(self.origin.clone())
         };
         let build_dependencies =
             depend_kind::DependKindVec(Self::as_dep_kind(&self.build_dependencies)?);
@@ -58,7 +58,7 @@ impl RawDew {
             depend_kind::DependKindVec(Self::as_dep_kind(&self.runtime_dependencies)?);
         Ok(ProcessedMetaData {
             name: self.name,
-            kind: MetaDataKind::Dew,
+            kind: MetaDataKind::Plz,
             description: self.description,
             version: self.version,
             origin,
@@ -104,13 +104,13 @@ impl RawDew {
             // } else if let Some((name, ver)) = dep.split_once(':') {
             //     DependKind::Specific(DepVer {
             //         name: name.to_string(),
-            //         range: RawDew::parse_ver(ver)?,
+            //         range: RawPlz::parse_ver(ver)?,
             //     })
             } else if let Some(index) = dep.find(['=', '>', '<']) {
                 let (name, ver) = dep.split_at(index);
                 DependKind::Specific(DepVer {
                     name: name.to_string(),
-                    range: RawDew::parse_ver(ver).wrap()?,
+                    range: RawPlz::parse_ver(ver).wrap()?,
                 })
             } else {
                 DependKind::Latest(dep.to_string())

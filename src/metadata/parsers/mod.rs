@@ -5,11 +5,11 @@ use std::fmt::{self, Display, Formatter};
 use crate::errors::{OtherSnafu, WrappedError};
 
 pub mod apt;
-pub mod dew;
+pub mod plz;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum MetaDataKind {
-    Dew,
+    Plz,
     Apt,
 }
 
@@ -19,7 +19,7 @@ impl MetaDataKind {
             error: "Missing type identifier!",
         })?;
         match kind as u8 {
-            0 => Ok(Self::Dew),
+            0 => Ok(Self::Plz),
             1 => Ok(Self::Apt),
             kind => Err(WrappedError::Other {
                 error: format!("Invalid kind identifier `{kind}`!").into(),
@@ -32,7 +32,7 @@ impl MetaDataKind {
 impl Display for MetaDataKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Dew => "\x00",
+            Self::Plz => "\x00",
             Self::Apt => "\x01",
         })
     }

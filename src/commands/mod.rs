@@ -9,8 +9,8 @@ use crate::utils::{PostAction, choice};
 use std::{env, io::Write, process::Command as RunCommand, slice::Iter};
 
 pub mod configure;
-pub mod dew_init;
 pub mod install;
+pub mod plz_init;
 pub mod remove;
 pub mod unbind;
 pub mod update;
@@ -337,7 +337,7 @@ impl Command {
                         if let Some(program) = program {
                             let mut cmd = RunCommand::new(program);
                             if !cmd
-                                .args(["dew-init", "--force"])
+                                .args(["plz-init", "--force"])
                                 .status()
                                 .is_ok_and(|x| x.code() == Some(0))
                             {
