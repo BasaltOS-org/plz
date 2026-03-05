@@ -1,5 +1,3 @@
-use tokio::runtime::Runtime;
-
 use crate::errors::{Wrapped, WrappedError};
 use crate::flags::Flag;
 use crate::settings::remove_lock;
@@ -24,7 +22,31 @@ enum HandlerResult {
 
 // Extraction of complex type
 type Subcommand = Option<Vec<fn(parents: &[String]) -> Command>>;
-type MyFunc = fn(rt: &Runtime, states: &StateBox, args: Option<&[String]>) -> PostAction;
+// type MyFunc = fn(rt: &Runtime, states: &StateBox, args: Option<&[String]>) -> PostAction;
+pub enum CommandFunc {
+    GetHelp,
+    Install,
+    Init,
+    Remove,
+    Purge,
+    Unbind,
+    Update,
+    Upgrade,
+}
+impl CommandFunc {
+    async fn run(&self, states: &StateBox, args: Option<&[String]>) -> PostAction {
+        match self {
+            Self::GetHelp => PostAction::GetHelp,
+            Self::Install => install::run(states, args).await,
+            Self::Init => plz_init::get_endpoints(states, args).await,
+            Self::Purge => remove::run(states, args, true).await,
+            Self::Remove => remove::run(states, args, false).await,
+            Self::Unbind => unbind::run(states, args).await,
+            Self::Update => update::run(states, args).await,
+            Self::Upgrade => upgrade::run(states, args).await,
+        }
+    }
+}
 
 pub struct Command {
     pub name: String,
@@ -33,7 +55,7 @@ pub struct Command {
     pub flags: Vec<Flag>,
     pub subcommands: Subcommand,
     states: StateBox,
-    pub run_func: MyFunc,
+    pub command_func: CommandFunc,
     pub hierarchy: Vec<String>,
 }
 
@@ -52,7 +74,7 @@ impl Command {
         about: &str,
         flags: Vec<Flag>,
         subcommands: Subcommand,
-        run_func: MyFunc,
+        command_func: CommandFunc,
         hierarchy: &[String],
     ) -> Self {
         Command {
@@ -62,7 +84,7 @@ impl Command {
             flags,
             subcommands,
             states: StateBox::new(),
-            run_func,
+            command_func,
             hierarchy: hierarchy.to_vec(),
         }
     }
@@ -135,7 +157,7 @@ impl Command {
         help
     }
     // Run the command
-    pub async fn run(mut self, rt: &Runtime, mut raw_args: Iter<'_, String>) {
+    pub async fn run(mut self, mut raw_args: Iter<'_, String>) {
         let mut first_arg = true;
         // store breakpoint
         let mut opr: Option<(usize, Option<String>)> = None;
@@ -143,21 +165,19 @@ impl Command {
         // outer loop over args
         'outer: while let Some(arg) = raw_args.next() {
             if let Some(l_arg) = arg.strip_prefix("--") {
-                match self.handle_long_flag(rt, l_arg, &mut raw_args, &mut opr) {
+                match self.handle_long_flag(l_arg, &mut raw_args, &mut opr).await {
                     HandlerResult::ContinueOuter => continue 'outer,
                     HandlerResult::ReturnEarly => return,
                 }
             } else if let Some(s_arg) = arg.strip_prefix("-") {
-                match self.handle_short_flags(rt, s_arg, &mut raw_args, &mut opr) {
+                match self
+                    .handle_short_flags(s_arg, &mut raw_args, &mut opr)
+                    .await
+                {
                     HandlerResult::ContinueOuter => continue 'outer,
                     HandlerResult::ReturnEarly => return,
                 }
-            } else if first_arg
-                && self
-                    .try_handle_subcommand(rt, arg, &mut raw_args)
-                    .await
-                    .is_ok()
-            {
+            } else if first_arg && self.try_handle_subcommand(arg, &mut raw_args).await.is_ok() {
                 return;
             } else {
                 args.push(arg.to_string());
@@ -166,10 +186,10 @@ impl Command {
         }
         if let Some((flag_idx, val)) = opr {
             let flag = &self.flags[flag_idx];
-            (flag.run_func)(rt, &mut self.states, val)
+            flag.flag_func.run(&mut self.states, val).await
         } else {
             if let Err(e) = self
-                .handle_post_action((self.run_func)(rt, &self.states, Some(&args)))
+                .handle_post_action(self.command_func.run(&self.states, Some(&args)).await)
                 .await
                 .wrap()
             {
@@ -178,9 +198,8 @@ impl Command {
         }
     }
 
-    fn handle_long_flag(
+    async fn handle_long_flag(
         &mut self,
-        rt: &Runtime,
         l_arg: &str,
         args: &mut Iter<'_, String>,
         opr: &mut Option<(usize, Option<String>)>,
@@ -206,7 +225,7 @@ impl Command {
                             }
                             *opr = Some((i, val));
                         } else {
-                            (flag.run_func)(rt, &mut self.states, val)
+                            flag.flag_func.run(&mut self.states, val).await
                         }
                         return HandlerResult::ContinueOuter;
                     }
@@ -218,9 +237,8 @@ impl Command {
         }
     }
 
-    fn handle_short_flags(
+    async fn handle_short_flags(
         &mut self,
-        rt: &Runtime,
         s_arg: &str,
         args: &mut Iter<'_, String>,
         opr: &mut Option<(usize, Option<String>)>,
@@ -246,7 +264,7 @@ impl Command {
                                 }
                                 *opr = Some((i, val));
                             } else {
-                                (flag.run_func)(rt, &mut self.states, val)
+                                flag.flag_func.run(&mut self.states, val).await
                             }
                             continue 'mid;
                         }
@@ -262,7 +280,6 @@ impl Command {
 
     async fn try_handle_subcommand(
         &self,
-        rt: &Runtime,
         arg: &str,
         args: &mut Iter<'_, String>,
     ) -> Result<(), ()> {
@@ -271,12 +288,12 @@ impl Command {
             for command in subcommands {
                 let command = (command)(parents);
                 if command.name == *arg {
-                    Box::pin(command.run(rt, args.clone())).await;
+                    Box::pin(command.run(args.clone())).await;
                     return Ok(());
                 } else {
                     for alias in &command.aliases {
                         if alias == arg {
-                            Box::pin(command.run(rt, args.clone())).await;
+                            Box::pin(command.run(args.clone())).await;
                             return Ok(());
                         }
                     }

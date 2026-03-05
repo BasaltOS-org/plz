@@ -95,9 +95,7 @@ pub fn yes_flag() -> Flag {
         "Bypasses applicable confirmation dialogs.",
         false,
         false,
-        |_, states, _| {
-            states.shove("yes", true);
-        },
+        crate::flags::FlagFunc::ShoveYes,
     )
 }
 
@@ -108,9 +106,7 @@ pub fn specific_flag() -> Flag {
         "Makes every second argument the target version for the argument prior.",
         false,
         false,
-        |_, states, _| {
-            states.shove("specific", true);
-        },
+        crate::flags::FlagFunc::ShoveSpecific,
     )
 }
 

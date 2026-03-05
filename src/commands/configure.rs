@@ -1,12 +1,11 @@
 use snafu::{OptionExt, location};
-use tokio::runtime::Runtime;
 
 use crate::commands::Command;
 use crate::errors::{OtherSnafu, Wrapped, WrappedError};
 use crate::flags::Flag;
 use crate::settings::{SettingsJson, acquire_lock, remove_lock};
 use crate::statebox::StateBox;
-use crate::utils::{PostAction, choice, yes_flag};
+use crate::utils::{choice, yes_flag};
 
 pub fn build(hierarchy: &[String]) -> Command {
     let setting = Flag::new(
@@ -15,7 +14,7 @@ pub fn build(hierarchy: &[String]) -> Command {
         "Command to set options in the SettingsJSON file.",
         true,
         true,
-        set_handle,
+        crate::flags::FlagFunc::SetHandle,
     );
     Command::new(
         "configure",
@@ -23,25 +22,29 @@ pub fn build(hierarchy: &[String]) -> Command {
         "Configures internal PLZ settings.",
         vec![setting, yes_flag()],
         None,
-        |_, _, _| PostAction::GetHelp,
+        crate::commands::CommandFunc::GetHelp,
         hierarchy,
     )
 }
 
-fn set_handle(rt: &Runtime, states: &mut StateBox, arg: Option<String>) {
-    if let Err(error) = rt.block_on(async {
-        if acquire_lock().await.wrap()?.is_some() {
-            return Err(WrappedError::Other {
-                error: "Did not expect a `PostAction` at this time.".into(),
-                loc: location!(),
-            });
-        };
-        let settings = SettingsJson::get_settings().await.wrap()?;
-        set_func(states, arg, settings).await.wrap()?;
-        remove_lock().await.wrap()
-    }) {
+pub async fn set_handle(states: &mut StateBox, arg: Option<String>) {
+    if let Err(error) = internal_set_handle(states, arg).await {
         println!("{error:?}")
     }
+}
+async fn internal_set_handle(
+    states: &mut StateBox,
+    arg: Option<String>,
+) -> Result<(), WrappedError> {
+    if acquire_lock().await.wrap()?.is_some() {
+        return Err(WrappedError::Other {
+            error: "Did not expect a `PostAction` at this time.".into(),
+            loc: location!(),
+        });
+    };
+    let settings = SettingsJson::get_settings().await.wrap()?;
+    set_func(states, arg, settings).await.wrap()?;
+    remove_lock().await.wrap()
 }
 
 async fn set_func(

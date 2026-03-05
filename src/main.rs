@@ -34,19 +34,9 @@ pub async fn main() {
             commands::update::build,
             commands::upgrade::build,
         ]),
-        |_, _command, _args| utils::PostAction::GetHelp,
+        commands::CommandFunc::GetHelp,
         &[],
     );
     // Run the command with the provided arguments
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(error) => {
-            println!("Tokio is not supported on this system. This program cannot run. {error:?}");
-            return;
-        }
-    };
-    commands::Command::run(main_command, &rt, args).await;
+    commands::Command::run(main_command, args).await;
 }

@@ -1,8 +1,23 @@
-use tokio::runtime::Runtime;
+use crate::{commands::configure, statebox::StateBox};
 
-use crate::statebox::StateBox;
+// type MyFunc = fn(parent: &mut StateBox, flag: Option<String>);
+pub enum FlagFunc {
+    SetHandle,
+    ShoveForce,
+    ShoveYes,
+    ShoveSpecific,
+}
 
-type MyFunc = fn(rt: &Runtime, parent: &mut StateBox, flag: Option<String>);
+impl FlagFunc {
+    pub async fn run(&self, states: &mut StateBox, arg: Option<String>) {
+        match self {
+            Self::SetHandle => configure::set_handle(states, arg).await,
+            Self::ShoveForce => states.shove("force", true),
+            Self::ShoveYes => states.shove("yes", true),
+            Self::ShoveSpecific => states.shove("specific", true),
+        }
+    }
+}
 
 pub struct Flag {
     pub short: Option<char>,
@@ -10,7 +25,7 @@ pub struct Flag {
     pub about: String,
     pub consumer: bool,
     pub breakpoint: bool,
-    pub run_func: MyFunc,
+    pub flag_func: FlagFunc,
 }
 
 impl PartialEq for Flag {
@@ -27,7 +42,7 @@ impl Flag {
         about: &str,
         consumer: bool,
         breakpoint: bool,
-        run_func: MyFunc,
+        flag_func: FlagFunc,
     ) -> Self {
         Flag {
             short,
@@ -35,7 +50,7 @@ impl Flag {
             about: about.to_string(),
             consumer,
             breakpoint,
-            run_func,
+            flag_func,
         }
     }
     pub fn help(&self) -> String {

@@ -1,5 +1,4 @@
 use snafu::ResultExt;
-use tokio::runtime::Runtime;
 
 use crate::commands::Command;
 use crate::errors::{NetSnafu, Wrapped, WrappedError};
@@ -17,9 +16,7 @@ pub fn build(hierarchy: &[String]) -> Command {
         "bypasses the warning before running the command",
         false,
         false,
-        |_rt, states, _args| {
-            states.shove("force", true);
-        },
+        crate::flags::FlagFunc::ShoveForce,
     );
     Command::new(
         "pax-init",
@@ -27,32 +24,37 @@ pub fn build(hierarchy: &[String]) -> Command {
         "Initializes the endpoints for pax",
         vec![force],
         None,
-        get_endpoints,
+        crate::commands::CommandFunc::Init,
+        // get_endpoints,
         hierarchy,
     )
 }
 
-fn get_endpoints(rt: &Runtime, states: &StateBox, _args: Option<&[String]>) -> PostAction {
-    match rt.block_on(async {
-        if let Some(action) = acquire_lock().await.wrap()? {
-            return Ok(action);
-        };
-        if states.get::<bool>("force").is_none_or(|x| !*x) {
-            println!(
-                "\x1B[33m===== WARNING! WARNING! WARNING! =====\x1B[0m
-This command should \x1B[31mNOT\x1B[0m be run as part of a standard update procedure.
-To continue anyway, run with flag `\x1B[35m--{LONG_NAME}\x1B[0m`."
-            );
-        } else {
-            println!("Pulling sources...");
-            gen_sources().await.wrap()?;
-            println!("Done!");
-        }
-        Ok(PostAction::Return)
-    }) {
+pub async fn get_endpoints(states: &StateBox, args: Option<&[String]>) -> PostAction {
+    match internal_get_endpoints(states, args).await {
         Ok(action) => action,
         Err(error) => PostAction::Fuck(error),
     }
+}
+async fn internal_get_endpoints(
+    states: &StateBox,
+    _args: Option<&[String]>,
+) -> Result<PostAction, WrappedError> {
+    if let Some(action) = acquire_lock().await.wrap()? {
+        return Ok(action);
+    };
+    if states.get::<bool>("force").is_none_or(|x| !*x) {
+        println!(
+            "\x1B[33m===== WARNING! WARNING! WARNING! =====\x1B[0m
+This command should \x1B[31mNOT\x1B[0m be run as part of a standard update procedure.
+To continue anyway, run with flag `\x1B[35m--{LONG_NAME}\x1B[0m`."
+        );
+    } else {
+        println!("Pulling sources...");
+        gen_sources().await.wrap()?;
+        println!("Done!");
+    }
+    Ok(PostAction::Return)
 }
 
 async fn gen_sources() -> Result<(), WrappedError> {
