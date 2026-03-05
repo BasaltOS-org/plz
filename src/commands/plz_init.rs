@@ -19,9 +19,9 @@ pub fn build(hierarchy: &[String]) -> Command {
         crate::flags::FlagFunc::ShoveForce,
     );
     Command::new(
-        "pax-init",
+        "plz-init",
         Vec::new(),
-        "Initializes the endpoints for pax",
+        "Initializes the endpoints for plz",
         vec![force],
         None,
         crate::commands::CommandFunc::Init,
