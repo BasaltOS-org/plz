@@ -63,7 +63,7 @@ impl SettingsJson {
         }
     }
     pub async fn set_settings(self) -> Result<(), WrappedError> {
-        let mut file = File::create(affirm_path().await.wrap()?)
+        let mut file = File::create(affirm_path().await.wrap(location!())?)
             .await
             .context(TokioIOSnafu)?;
         let settings = serde_json::to_string(&self).context(JSONSnafu)?;
@@ -72,7 +72,7 @@ impl SettingsJson {
             .context(TokioIOSnafu)
     }
     pub async fn get_settings() -> Result<Self, WrappedError> {
-        let mut file = File::open(affirm_path().await.wrap()?)
+        let mut file = File::open(affirm_path().await.wrap(location!())?)
             .await
             .context(TokioIOSnafu)?;
         let mut sources = String::new();
@@ -233,7 +233,7 @@ pub enum Arch {
 
 impl Arch {
     pub async fn is_compatible(&self, name: &str) -> Result<bool, WrappedError> {
-        let installed = SettingsJson::get_settings().await.wrap()?.arch;
+        let installed = SettingsJson::get_settings().await.wrap(location!())?.arch;
         match self {
             Self::Any => Ok(true),
             Self::X86_64v1 => Ok([Self::X86_64v1, Self::X86_64v3].contains(&installed)),
@@ -247,7 +247,7 @@ impl Arch {
 }
 
 async fn affirm_path() -> Result<PathBuf, WrappedError> {
-    let mut path = get_dir().await.wrap()?;
+    let mut path = get_dir().await.wrap(location!())?;
     path.push("settings.json");
     if !path.exists() {
         let mut file = File::create(&path).await.context(TokioIOSnafu)?;
@@ -275,7 +275,7 @@ pub async fn acquire_lock() -> Result<Option<PostAction>, WrappedError> {
     if !is_root() {
         return Ok(Some(PostAction::Elevate));
     }
-    let mut settings = SettingsJson::get_settings().await.wrap()?;
+    let mut settings = SettingsJson::get_settings().await.wrap(location!())?;
     loop {
         if settings.locked {
             for i in 0..20 {
@@ -319,7 +319,7 @@ pub async fn acquire_lock() -> Result<Option<PostAction>, WrappedError> {
                 sleep(Duration::from_millis(50));
             }
             println!("\x1B[2K\r\x1B[92mAwaiting program lock. Retrying now\x1B[0m...");
-            settings = SettingsJson::get_settings().await.wrap()?;
+            settings = SettingsJson::get_settings().await.wrap(location!())?;
         } else {
             break;
         }
@@ -328,12 +328,12 @@ pub async fn acquire_lock() -> Result<Option<PostAction>, WrappedError> {
         return Ok(Some(PostAction::PullSources));
     }
     settings.locked = true;
-    settings.set_settings().await.wrap()?;
+    settings.set_settings().await.wrap(location!())?;
     Ok(None)
 }
 
 pub async fn remove_lock() -> Result<(), WrappedError> {
-    let mut settings = SettingsJson::get_settings().await.wrap()?;
+    let mut settings = SettingsJson::get_settings().await.wrap(location!())?;
     settings.locked = false;
-    settings.set_settings().await.wrap()
+    settings.set_settings().await.wrap(location!())
 }

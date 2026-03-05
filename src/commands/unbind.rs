@@ -1,3 +1,5 @@
+use snafu::location;
+
 use crate::commands::Command;
 use crate::errors::{Wrapped, WrappedError};
 use crate::metadata::unbind;
@@ -27,7 +29,7 @@ async fn internal_run(
     states: &StateBox,
     args: Option<&[String]>,
 ) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap()? {
+    if let Some(action) = acquire_lock().await.wrap(location!())? {
         return Ok(action);
     };
     let mut args = match args {
@@ -44,6 +46,6 @@ async fn internal_run(
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    unbind(&data).await.wrap()?;
+    unbind(&data).await.wrap(location!())?;
     Ok(PostAction::Return)
 }

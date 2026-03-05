@@ -50,7 +50,7 @@ async fn internal_run(
     args: Option<&[String]>,
     purge: bool,
 ) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap()? {
+    if let Some(action) = acquire_lock().await.wrap(location!())? {
         return Ok(action);
     };
     let mut args = match args {
@@ -67,7 +67,7 @@ async fn internal_run(
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    let metadatas = get_local_pkgs(&data).await.wrap()?;
+    let metadatas = get_local_pkgs(&data).await.wrap(location!())?;
     println!();
     if metadatas.is_empty() {
         return Ok(PostAction::NothingToDo);
@@ -104,7 +104,7 @@ async fn internal_run(
         }
     }
     for package in metadatas.primary {
-        package.remove(purge, None).await.wrap()?;
+        package.remove(purge, None).await.wrap(location!())?;
     }
     Ok(PostAction::Return)
 }

@@ -1,5 +1,5 @@
 use nix::unistd;
-use snafu::ResultExt;
+use snafu::{ResultExt, location};
 use sqlx::{SqlitePool, query, sqlite::SqliteConnectOptions};
 use std::{io::Write, path::PathBuf, str::FromStr};
 use tokio::{fs::DirBuilder, process::Command};
@@ -35,7 +35,7 @@ pub async fn get_dir() -> Result<PathBuf, WrappedError> {
 }
 
 pub async fn get_metadata_dir() -> Result<PathBuf, WrappedError> {
-    let mut path = get_dir().await.wrap()?;
+    let mut path = get_dir().await.wrap(location!())?;
     path.push("installed");
     DirBuilder::new()
         .recursive(true)
@@ -46,7 +46,7 @@ pub async fn get_metadata_dir() -> Result<PathBuf, WrappedError> {
 }
 
 pub async fn get_update_dir() -> Result<PathBuf, WrappedError> {
-    let mut path = get_dir().await.wrap()?;
+    let mut path = get_dir().await.wrap(location!())?;
     path.push("updates");
     DirBuilder::new()
         .recursive(true)

@@ -78,19 +78,19 @@ impl RawPlz {
         let mut lower = VerReq::NoBound;
         let mut upper = VerReq::NoBound;
         if let Some(ver) = ver.strip_prefix(">>") {
-            lower = VerReq::Gt(Version::parse(ver).wrap()?);
+            lower = VerReq::Gt(Version::parse(ver).wrap(location!())?);
         } else if let Some(ver) = ver.strip_prefix(">=") {
-            lower = VerReq::Ge(Version::parse(ver).wrap()?);
+            lower = VerReq::Ge(Version::parse(ver).wrap(location!())?);
         } else if let Some(ver) = ver.strip_prefix("==") {
-            lower = VerReq::Eq(Version::parse(ver).wrap()?);
-            upper = VerReq::Eq(Version::parse(ver).wrap()?);
+            lower = VerReq::Eq(Version::parse(ver).wrap(location!())?);
+            upper = VerReq::Eq(Version::parse(ver).wrap(location!())?);
         } else if let Some(ver) = ver.strip_prefix("<=") {
-            upper = VerReq::Le(Version::parse(ver).wrap()?);
+            upper = VerReq::Le(Version::parse(ver).wrap(location!())?);
         } else if let Some(ver) = ver.strip_prefix("<<") {
-            upper = VerReq::Lt(Version::parse(ver).wrap()?);
+            upper = VerReq::Lt(Version::parse(ver).wrap(location!())?);
         } else {
-            lower = VerReq::Eq(Version::parse(ver).wrap()?);
-            upper = VerReq::Eq(Version::parse(ver).wrap()?);
+            lower = VerReq::Eq(Version::parse(ver).wrap(location!())?);
+            upper = VerReq::Eq(Version::parse(ver).wrap(location!())?);
         };
         // Yeah this needs to be done properly, so.....
         // thingy
@@ -110,7 +110,7 @@ impl RawPlz {
                 let (name, ver) = dep.split_at(index);
                 DependKind::Specific(DepVer {
                     name: name.to_string(),
-                    range: RawPlz::parse_ver(ver).wrap()?,
+                    range: RawPlz::parse_ver(ver).wrap(location!())?,
                 })
             } else {
                 DependKind::Latest(dep.to_string())

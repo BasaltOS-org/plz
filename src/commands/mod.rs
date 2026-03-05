@@ -1,3 +1,5 @@
+use snafu::location;
+
 use crate::errors::{Wrapped, WrappedError};
 use crate::flags::Flag;
 use crate::settings::remove_lock;
@@ -191,7 +193,7 @@ impl Command {
             if let Err(e) = self
                 .handle_post_action(self.command_func.run(&self.states, Some(&args)).await)
                 .await
-                .wrap()
+                .wrap(location!())
             {
                 println!("{e:?}")
             };
@@ -316,7 +318,7 @@ impl Command {
     }
 
     async fn handle_post_action(&self, action: PostAction) -> Result<(), WrappedError> {
-        remove_lock().await.wrap()?;
+        remove_lock().await.wrap(location!())?;
         match action {
             PostAction::Elevate => {
                 println!(
@@ -339,7 +341,7 @@ impl Command {
             PostAction::Err(code) => std::process::exit(code),
             PostAction::Fuck(fault) => {
                 println!(
-                    "\x1B[2K\rOperation failed! Reported Error: \"\x1B[91m{fault}\x1B[0m\"\n\x1B[91m=== YOU MAY HAVE BROKEN PACKAGES! ===",
+                    "\x1B[2K\rOperation failed! Reported Error: \"\x1B[91m{fault}\x1B[0m\"\n\x1B[91m=== YOU MAY HAVE BROKEN PACKAGES! ===\x1B[0m",
                 );
             }
             PostAction::GetHelp => println!("{}", self.help()),

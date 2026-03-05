@@ -62,14 +62,14 @@ impl DependKind {
                 Self::Latest(latest) => {
                     ProcessedMetaData::get_metadata(latest, None, sources, true, pool)
                         .await
-                        .wrap()?
+                        .wrap(location!())?
                 }
                 Self::Specific(dep_ver) => {
                     let specific = dep_ver
                         .clone()
                         .pull_metadata(Some(sources), true, pool)
                         .await
-                        .wrap()?;
+                        .wrap(location!())?;
                     ProcessedMetaData::get_metadata(
                         &specific.name,
                         Some(&specific.version.to_string()),
@@ -78,7 +78,7 @@ impl DependKind {
                         pool,
                     )
                     .await
-                    .wrap()?
+                    .wrap(location!())?
                 }
                 Self::Volatile(volatile) => {
                     if which(volatile) {
@@ -86,19 +86,19 @@ impl DependKind {
                     } else {
                         ProcessedMetaData::get_metadata(volatile, None, sources, true, pool)
                             .await
-                            .wrap()?
+                            .wrap(location!())?
                     }
                 }
             };
             let specific = Specific {
                 name: dep.name.to_string(),
-                version: Version::parse(&dep.version).wrap()?,
+                version: Version::parse(&dep.version).wrap(location!())?,
             };
             if !prior.contains(&specific) {
                 prior.insert(specific);
                 let child = Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior, pool))
                     .await
-                    .wrap()?;
+                    .wrap(location!())?;
                 result.push(child);
             }
         }
@@ -197,7 +197,7 @@ impl DependKind {
         let data = chars.collect::<String>();
         match kind as u8 {
             1 => Ok(Self::Latest(data)),
-            2 => Ok(Self::Specific(DepVer::parse(&data).wrap()?)),
+            2 => Ok(Self::Specific(DepVer::parse(&data).wrap(location!())?)),
             3 => Ok(Self::Volatile(data)),
             kind => Err(WrappedError::Other {
                 error: format!("Invalid kind identifier `{kind}`!").into(),

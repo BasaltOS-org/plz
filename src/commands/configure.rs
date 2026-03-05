@@ -36,15 +36,15 @@ async fn internal_set_handle(
     states: &mut StateBox,
     arg: Option<String>,
 ) -> Result<(), WrappedError> {
-    if acquire_lock().await.wrap()?.is_some() {
+    if acquire_lock().await.wrap(location!())?.is_some() {
         return Err(WrappedError::Other {
             error: "Did not expect a `PostAction` at this time.".into(),
             loc: location!(),
         });
     };
-    let settings = SettingsJson::get_settings().await.wrap()?;
-    set_func(states, arg, settings).await.wrap()?;
-    remove_lock().await.wrap()
+    let settings = SettingsJson::get_settings().await.wrap(location!())?;
+    set_func(states, arg, settings).await.wrap(location!())?;
+    remove_lock().await.wrap(location!())
 }
 
 async fn set_func(
@@ -70,7 +70,9 @@ async fn set_func(
                 "Will change setting `exec` from \x1B[95m{:?}\x1B[0m to \x1B[95m{val:?}\x1B[0m.",
                 settings.exec
             );
-            if states.get("yes").is_none_or(|x: &bool| !*x) && !choice("Proceed?", true).wrap()? {
+            if states.get("yes").is_none_or(|x: &bool| !*x)
+                && !choice("Proceed?", true).wrap(location!())?
+            {
                 return Err(WrappedError::Other {
                     error: "Operation aborted by user.".into(),
                     loc: location!(),
@@ -85,6 +87,6 @@ async fn set_func(
             });
         }
     }
-    settings.set_settings().await.wrap()?;
+    settings.set_settings().await.wrap(location!())?;
     Ok(())
 }

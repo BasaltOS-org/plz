@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use snafu::OptionExt;
+use snafu::{OptionExt, location};
 use std::fmt::Display;
 
 use crate::errors::{OtherSnafu, Wrapped, WrappedError};
@@ -43,8 +43,8 @@ impl Range {
         let (lower, upper) = input.split_once(' ').context(OtherSnafu {
             error: "Missing Range field `upper`!",
         })?;
-        let lower = VerReq::parse(lower).wrap()?;
-        let upper = VerReq::parse(upper).wrap()?;
+        let lower = VerReq::parse(lower).wrap(location!())?;
+        let upper = VerReq::parse(upper).wrap(location!())?;
         Ok(Self { lower, upper })
     }
 }

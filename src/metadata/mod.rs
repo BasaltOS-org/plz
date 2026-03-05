@@ -1,4 +1,4 @@
-use snafu::{OptionExt, ResultExt};
+use snafu::{OptionExt, ResultExt, location};
 use sqlx::{Sqlite, SqlitePool, query_as};
 use std::collections::HashSet;
 
@@ -63,7 +63,7 @@ impl QueuedChanges {
         let mut items = self.primary.iter().cloned().collect::<Vec<Specific>>();
         items.extend_from_slice(&self.secondary.iter().cloned().collect::<Vec<Specific>>());
         for item in items {
-            item.get_dependents(self, pool).await.wrap()?;
+            item.get_dependents(self, pool).await.wrap(location!())?;
         }
         Ok(())
     }
@@ -94,9 +94,9 @@ impl InstallPackage {
         data
     }
     pub async fn install(self) -> Result<(), WrappedError> {
-        let pool = get_pool().await.wrap()?;
+        let pool = get_pool().await.wrap(location!())?;
         let self_name = self.metadata.name.to_string();
-        let mut collected: Vec<ProcessedMetaData> = self.collect().wrap()?;
+        let mut collected: Vec<ProcessedMetaData> = self.collect().wrap(location!())?;
         let depends = collected
             .iter()
             .map(|x| {
@@ -146,7 +146,7 @@ impl InstallPackage {
                 set.reverse();
                 let mut chosen = None;
                 for metadata in set {
-                    let ver_req = VerReq::Eq(Version::parse(&metadata.version).wrap()?);
+                    let ver_req = VerReq::Eq(Version::parse(&metadata.version).wrap(location!())?);
                     let new_range = Range {
                         lower: ver_req.clone(),
                         upper: ver_req,
@@ -165,18 +165,18 @@ impl InstallPackage {
             }
         }
         for metadata in filtered {
-            metadata.install_package(&pool).await.wrap()?;
+            metadata.install_package(&pool).await.wrap(location!())?;
         }
         Ok(())
     }
     pub fn collect(self) -> Result<Vec<ProcessedMetaData>, WrappedError> {
         let mut result = Vec::new();
         for dep in self.build_deps {
-            let data = dep.collect().wrap()?;
+            let data = dep.collect().wrap(location!())?;
             result.extend_from_slice(&data);
         }
         for dep in self.run_deps {
-            let data = dep.collect().wrap()?;
+            let data = dep.collect().wrap(location!())?;
             result.extend_from_slice(&data);
         }
         result.push(self.metadata);
@@ -187,16 +187,16 @@ impl InstallPackage {
 pub async fn get_packages(
     args: &[(&String, Option<&String>)],
 ) -> Result<Vec<InstallPackage>, WrappedError> {
-    let pool = get_pool().await.wrap()?;
+    let pool = get_pool().await.wrap(location!())?;
     print!("\x1B[2K\rBuilding dependency tree... 0%");
-    let settings = SettingsJson::get_settings().await.wrap()?;
+    let settings = SettingsJson::get_settings().await.wrap(location!())?;
     let mut result = Vec::new();
     let mut seen = HashSet::new();
     let count = args.len();
     for (i, package) in args.iter().enumerate() {
         if let Some(data) = get_package(&settings.sources, package, false, &mut seen, &pool)
             .await
-            .wrap()?
+            .wrap(location!())?
         {
             result.push(data);
         }
@@ -217,7 +217,7 @@ async fn get_package(
     let metadata =
         ProcessedMetaData::get_metadata(app, version.map(|x| x.as_str()), sources, dependent, pool)
             .await
-            .wrap()?;
+            .wrap(location!())?;
     if let Ok(Some(installed)) = InstalledMetaData::open(&metadata.name, pool).await
         && installed.version == metadata.version
     {
@@ -226,7 +226,7 @@ async fn get_package(
     Ok(Some(
         ProcessedMetaData::get_depends(&metadata, sources, prior, pool)
             .await
-            .wrap()?,
+            .wrap(location!())?,
     ))
 }
 
@@ -235,7 +235,7 @@ async fn get_package(
 pub async fn get_local_pkgs(
     args: &[(&String, Option<&String>)],
 ) -> Result<QueuedChanges, WrappedError> {
-    let pool = get_pool().await.wrap()?;
+    let pool = get_pool().await.wrap(location!())?;
     print!("\x1B[2K\rCollecting packages... 0%");
     let mut seen = HashSet::new();
     let count = args.len();
@@ -245,7 +245,7 @@ pub async fn get_local_pkgs(
         result.extend(get_local_pkg(dep, &mut seen, true, &pool).await?);
     }
     print!("\rCollecting packages... Done!");
-    result.dependents(&pool).await.wrap()?;
+    result.dependents(&pool).await.wrap(location!())?;
     Ok(result)
 }
 
@@ -258,16 +258,19 @@ async fn get_local_pkg(
     let (dep, ver) = *dep;
     let data = match InstalledMetaData::open(dep, pool)
         .await
-        .wrap()?
+        .wrap(location!())?
         .context(OtherSnafu {
             error: format!("Failed to locate `{dep}`!"),
         }) {
         Ok(data) => data,
         fault => {
             if root {
-                fault.wrap_with("Attempted to remove a package that isn't installed!".into())?
+                fault.wrap_with(
+                    "Attempted to remove a package that isn't installed!".into(),
+                    location!(),
+                )?
             } else {
-                fault.wrap()?
+                fault.wrap(location!())?
             }
         }
     };
@@ -297,14 +300,17 @@ async fn get_local_pkg(
                 pool,
             ))
             .await
-            .wrap_with(format!("Nested loop for package `{}`.", version.name).into())?;
+            .wrap_with(
+                format!("Nested loop for package `{}`.", version.name).into(),
+                location!(),
+            )?;
             result.extend(items);
             result.insert_secondary(dep);
         }
         if root {
             result.insert_primary(Specific {
                 name: version.name.to_string(),
-                version: Version::parse(&version.version).wrap()?,
+                version: Version::parse(&version.version).wrap(location!())?,
             });
         }
     }
@@ -314,8 +320,8 @@ async fn get_local_pkg(
 /* #endregion Remove/Purge */
 /* #region Update */
 pub async fn collect_updates() -> Result<(), WrappedError> {
-    let pool = get_pool().await.wrap()?;
-    let _settings = SettingsJson::get_settings().await.wrap()?;
+    let pool = get_pool().await.wrap(location!())?;
+    let _settings = SettingsJson::get_settings().await.wrap(location!())?;
     print!("\x1B[2K\rReading package lists... 0%");
     // let path = get_metadata_dir().nest("Get Metadata Directory")?;
     // let dir = fs::read_dir(&path)
@@ -323,12 +329,12 @@ pub async fn collect_updates() -> Result<(), WrappedError> {
     //         action: IOAction::ReadDir,
     //         loc: path.display().to_string(),
     //     })
-    //     .wrap()?;
+    //     .wrap(location!())?;
     // let mut children = Vec::new();
     // for file in dir.flatten() {
     //     children.push(collect_update(file.path(), &settings.sources));
     // }
-    // let path = get_update_dir().wrap()?;
+    // let path = get_update_dir().wrap(location!())?;
     let _children = query_as::<Sqlite, InstalledMetaData>("SELECT * FROM installed WHERE kind = 0")
         .fetch_all(&pool)
         .await
@@ -345,7 +351,7 @@ pub async fn collect_updates() -> Result<(), WrappedError> {
     //         action: IOAction::ReadDir,
     //         loc: path.display().to_string(),
     //     })
-    //     .wrap()?;
+    //     .wrap(location!())?;
     // let mut old = Vec::new();
     // for file in dir.flatten() {
     //     if let Some(name) = file.path().file_prefix() {
@@ -389,7 +395,7 @@ pub async fn collect_updates() -> Result<(), WrappedError> {
 //         && !metadata.dependent
 //         && let Some(data) =
 //             ProcessedMetaData::get_metadata(&name, None, sources, metadata.dependent).await
-//         && Version::parse(&data.version).wrap()? > Version::parse(&metadata.version).wrap()?
+//         && Version::parse(&data.version).wrap(location!())? > Version::parse(&metadata.version).wrap(location!())?
 //     {
 //         result.push(data);
 //     }
@@ -399,13 +405,13 @@ pub async fn collect_updates() -> Result<(), WrappedError> {
 /* #endregion Update */
 /* #region Upgrade */
 pub fn upgrade_all() -> Result<Vec<ProcessedMetaData>, WrappedError> {
-    // let path = get_update_dir().wrap()?;
+    // let path = get_update_dir().wrap(location!())?;
     // let dir = fs::read_dir(&path)
     //     .context(IOSnafu {
     //         action: IOAction::ReadDir,
     //         loc: path.display().to_string(),
     //     })
-    //     .wrap()?;
+    //     .wrap(location!())?;
     // let mut result = Vec::new();
     // for file in dir.flatten() {
     //     let path = file.path();
@@ -423,7 +429,7 @@ pub fn upgrade_all() -> Result<Vec<ProcessedMetaData>, WrappedError> {
 pub fn upgrade_only(
     pkgs: &[(&String, Option<&String>)],
 ) -> Result<Vec<ProcessedMetaData>, WrappedError> {
-    let base = upgrade_all().wrap()?;
+    let base = upgrade_all().wrap(location!())?;
     let base = base.iter();
     let mut result = HashSet::new();
     for pkg in pkgs {
@@ -450,15 +456,15 @@ pub fn upgrade_only(
 }
 
 pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), WrappedError> {
-    let pool = get_pool().await.wrap()?;
-    let settings = SettingsJson::get_settings().await.wrap()?;
+    let pool = get_pool().await.wrap(location!())?;
+    let settings = SettingsJson::get_settings().await.wrap(location!())?;
     for package in packages {
         println!("Upgrading `{}`...", package.name);
         package
             .upgrade_package(&settings.sources, &pool)
             .await
-            .wrap()?;
-        package.remove_update_cache(&pool).await.wrap()?;
+            .wrap(location!())?;
+        package.remove_update_cache(&pool).await.wrap(location!())?;
     }
     println!("Done!");
     Ok(())
@@ -467,10 +473,10 @@ pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), Wrap
 /* #endregion Upgrade */
 /* #region Unbind */
 pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), WrappedError> {
-    let pool = get_pool().await.wrap()?;
+    let pool = get_pool().await.wrap(location!())?;
     for bit in data {
         let (dep, ver) = *bit;
-        let data = get_installed_metadata(dep, &pool).await.wrap()?;
+        let data = get_installed_metadata(dep, &pool).await.wrap(location!())?;
         let mut data = data.context(OtherSnafu {
             error: format!("Cannot find data for package `{dep}`!"),
         })?;
@@ -495,7 +501,7 @@ pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), WrappedEr
                 );
             }
         };
-        data.write(&pool).await.wrap()?;
+        data.write(&pool).await.wrap(location!())?;
     }
     Ok(())
 }

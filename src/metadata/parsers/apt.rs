@@ -105,7 +105,7 @@ impl RawApt {
         let endpoint = format!("{origin}/{version}.deb");
         let response = reqwest::get(&endpoint).await.context(NetSnafu)?;
         let body = response.bytes().await.context(NetSnafu)?;
-        let path = tmpdir().await.wrap()?;
+        let path = tmpdir().await.wrap(location!())?;
         let deb = path.0.join("deb");
         let mut file = File::create(&deb).await.context(TokioIOSnafu)?;
         file.write_all(&body).await.context(TokioIOSnafu)?;
@@ -167,7 +167,7 @@ impl RawApt {
             error: format!("Missing data in control file for package `{name}`."),
         })?;
         let arch = Self::get_arch(&binary.architecture().unwrap_or_default());
-        if !arch.is_compatible(name).await.wrap()? {
+        if !arch.is_compatible(name).await.wrap(location!())? {
             return Err(WrappedError::Other {
                 error: format!("Incompatible machine architecture required by package `{name}`.")
                     .into(),
@@ -176,7 +176,7 @@ impl RawApt {
         }
         Self::to_processed(&binary, version, source, code, kind, dependent, pool)
             .await
-            .wrap()
+            .wrap(location!())
     }
     pub async fn to_processed(
         binary: &Binary,
@@ -198,10 +198,14 @@ impl RawApt {
         let deps = {
             let mut deps = HashSet::new();
             if let Some(depends) = depends {
-                deps.extend(Self::to_depends(&depends, pool).await.wrap()?);
+                deps.extend(Self::to_depends(&depends, pool).await.wrap(location!())?);
             }
             if let Some(recommends) = recommends {
-                deps.extend(Self::to_depends(&recommends, pool).await.wrap()?);
+                deps.extend(
+                    Self::to_depends(&recommends, pool)
+                        .await
+                        .wrap(location!())?,
+                );
             }
             // if let Some(suggests) = _suggests {
             //     deps.extend(Self::to_depends(&suggests)?);
@@ -246,7 +250,7 @@ impl RawApt {
             for version in versions.split("|") {
                 let (version, arch) = version.split_once(":").unwrap_or((version, "any"));
                 let arch = Self::get_arch(arch);
-                if !arch.is_compatible(version).await.wrap()? {
+                if !arch.is_compatible(version).await.wrap(location!())? {
                     return Err(WrappedError::Other {
                         error:
                             "The architecture of this package is incompatible with your hardware."

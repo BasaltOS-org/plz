@@ -46,7 +46,7 @@ impl InstalledMetaData {
             .execute(pool)
             .await
             .context(SQLSnafu)
-            .wrap()?;
+            .wrap(location!())?;
         Ok(Some(self))
     }
     pub async fn clear_dependencies(
@@ -68,7 +68,7 @@ impl InstalledMetaData {
         //         message: format!("Dependent `{}` {} not found", data.name, data.version),
         //         package: specific.name.to_string(),
         //     })
-        //     .wrap()?;
+        //     .wrap(location!())?;
         let index = {
             let mut e_index = None;
             for index in 0..data.dependencies.0.len() {
@@ -89,7 +89,7 @@ impl InstalledMetaData {
             })?
         };
         data.dependencies.0.remove(index);
-        data.write(pool).await.wrap()?;
+        data.write(pool).await.wrap(location!())?;
         Ok(())
     }
 }
@@ -108,8 +108,10 @@ impl InstalledInstallKind {
         })?;
         let data = chars.collect::<String>();
         match kind as u8 {
-            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap()?)),
-            1 => Ok(Self::Compilable(InstalledCompilable::parse(&data).wrap()?)),
+            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap(location!())?)),
+            1 => Ok(Self::Compilable(
+                InstalledCompilable::parse(&data).wrap(location!())?,
+            )),
             kind => Err(WrappedError::Other {
                 error: format!("Invalid kind identifier `{kind}`!").into(),
                 loc: location!(),

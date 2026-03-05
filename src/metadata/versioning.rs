@@ -28,13 +28,13 @@ impl DepVer {
     ) -> Result<Specific, WrappedError> {
         let metadata = InstalledMetaData::open(&self.name, pool)
             .await
-            .wrap()?
+            .wrap(location!())?
             .context(OtherSnafu {
                 error: format!("Failed to locate `{}`!", self.name),
             })?;
         Ok(Specific {
             name: metadata.name,
-            version: Version::parse(&metadata.version).wrap()?,
+            version: Version::parse(&metadata.version).wrap(location!())?,
         })
     }
     pub async fn pull_metadata(
@@ -45,7 +45,12 @@ impl DepVer {
     ) -> Result<ProcessedMetaData, WrappedError> {
         let sources = match sources {
             Some(sources) => sources,
-            None => &SettingsJson::get_settings().await.wrap()?.sources,
+            None => {
+                &SettingsJson::get_settings()
+                    .await
+                    .wrap(location!())?
+                    .sources
+            }
         };
         let mut versions = None;
         let mut g_source = None;
@@ -121,13 +126,13 @@ impl DepVer {
         })?;
         ProcessedMetaData::get_metadata(&name, Some(&ver), &[source], dependent, pool)
             .await
-            .wrap()
+            .wrap(location!())
     }
     pub fn parse(input: &str) -> Result<Self, WrappedError> {
         let (name, range) = input.split_once(' ').context(OtherSnafu {
             error: "Missing DepVer field `range`!",
         })?;
-        let range = Range::parse(range).wrap()?;
+        let range = Range::parse(range).wrap(location!())?;
         Ok(Self {
             name: name.to_string(),
             range,
@@ -228,7 +233,7 @@ impl Specific {
         if data.version == self.version.to_string() {
             let their_dep = Self {
                 name: their_name.to_string(),
-                version: Version::parse(their_ver).wrap()?,
+                version: Version::parse(their_ver).wrap(location!())?,
             };
             if let Some(found) = data
                 .dependents
@@ -263,24 +268,24 @@ impl Specific {
         //             action: IOAction::CreateFile,
         //             loc: path.display().to_string(),
         //         })
-        //         .wrap()?;
+        //         .wrap(location!())?;
         //     let data = serde_json::to_string(&data)
         //         .context(JSONSnafu {
         //             loc: data.name.to_string(),
         //         })
-        //         .wrap()?;
+        //         .wrap(location!())?;
         //     file.write_all(data.as_bytes())
         //         .context(IOSnafu {
         //             action: IOAction::WriteFile,
         //             loc: path.display().to_string(),
         //         })
-        //         .wrap()
+        //         .wrap(location!())
         // } else {
         //     Err(WrappedError::SystemError {
         //         message: format!("Failed to find data for dependency `{}`", self.name).into(),
         //         package: their_name.to_string().into(),
         //     })
-        //     .wrap()
+        //     .wrap(location!())
         // }
     }
     pub async fn get_dependents(
@@ -290,7 +295,7 @@ impl Specific {
     ) -> Result<(), WrappedError> {
         let data = InstalledMetaData::open(&self.name, pool)
             .await
-            .wrap()?
+            .wrap(location!())?
             .context(OtherSnafu {
                 error: format!("Failed to locate package `{}`!", self.name),
             })?;
@@ -302,7 +307,10 @@ impl Specific {
                         // .context(OtherSnafu {
                         //     error: format!("Nested loop for package {}", self.name),
                         // })
-                        .wrap_with(format!("Nested loop for package `{}`", self.name).into())?;
+                        .wrap_with(
+                            format!("Nested loop for package `{}`", self.name).into(),
+                            location!(),
+                        )?;
                 }
             }
             Ok(())
@@ -321,10 +329,12 @@ impl Specific {
         let msg = if purge { "Purging" } else { "Removing" };
         let pool = match pool {
             Some(pool) => pool,
-            None => &get_pool().await.wrap()?,
+            None => &get_pool().await.wrap(location!())?,
         };
         println!("{} `{}` version {}...", msg, self.name, self.version);
-        let data = get_installed_metadata(&self.name, pool).await.wrap()?;
+        let data = get_installed_metadata(&self.name, pool)
+            .await
+            .wrap(location!())?;
         let Some(data) = data else {
             // Since packages are interlinked, chances are another package
             // has already removed this one, and therefore we are just holding
@@ -343,8 +353,12 @@ impl Specific {
             let Ok(dep) = dep.get_installed_specific(pool).await else {
                 continue;
             };
-            data.clear_dependencies(&dep, pool).await.wrap()?;
-            Box::pin(dep.remove(purge, Some(pool))).await.wrap()?;
+            data.clear_dependencies(&dep, pool)
+                .await
+                .wrap(location!())?;
+            Box::pin(dep.remove(purge, Some(pool)))
+                .await
+                .wrap(location!())?;
         }
         match data.install_kind {
             InstalledInstallKind::PreBuilt(_) => {
@@ -386,13 +400,13 @@ impl Specific {
         //         action: IOAction::RemoveFile,
         //         loc: path.display().to_string(),
         //     })
-        //     .wrap()
+        //     .wrap(location!())
     }
     fn parse(input: &str) -> Result<Self, WrappedError> {
         let (name, version) = input.split_once(' ').context(OtherSnafu {
             error: "Missing Specific field `version`!",
         })?;
-        let version = Version::parse(version).wrap()?;
+        let version = Version::parse(version).wrap(location!())?;
         Ok(Self {
             name: name.to_string(),
             version,
@@ -416,7 +430,7 @@ impl SpecificVec {
         }
         let mut vers = Vec::new();
         for ver in input.split('\x00') {
-            vers.push(Specific::parse(ver).wrap()?);
+            vers.push(Specific::parse(ver).wrap(location!())?);
         }
         Ok(Self(vers))
     }

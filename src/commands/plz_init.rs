@@ -1,4 +1,4 @@
-use snafu::ResultExt;
+use snafu::{ResultExt, location};
 
 use crate::commands::Command;
 use crate::errors::{NetSnafu, Wrapped, WrappedError};
@@ -40,7 +40,7 @@ async fn internal_get_endpoints(
     states: &StateBox,
     _args: Option<&[String]>,
 ) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap()? {
+    if let Some(action) = acquire_lock().await.wrap(location!())? {
         return Ok(action);
     };
     if states.get::<bool>("force").is_none_or(|x| !*x) {
@@ -51,7 +51,7 @@ To continue anyway, run with flag `\x1B[35m--{LONG_NAME}\x1B[0m`."
         );
     } else {
         println!("Pulling sources...");
-        gen_sources().await.wrap()?;
+        gen_sources().await.wrap(location!())?;
         println!("Done!");
     }
     Ok(PostAction::Return)
@@ -61,11 +61,11 @@ async fn gen_sources() -> Result<(), WrappedError> {
     let url = "about:blank#blocked";
     let sources = reqwest::get(url).await.context(NetSnafu)?;
     let sources = sources.text().await.context(NetSnafu)?;
-    let mut settings = SettingsJson::get_settings().await.wrap()?;
+    let mut settings = SettingsJson::get_settings().await.wrap(location!())?;
     for source in sources.trim().split('\n') {
         // thingy; make this actually detect the source type
         let source = OriginKind::Plz(source.to_string());
         settings.sources.push(source);
     }
-    settings.set_settings().await.wrap()
+    settings.set_settings().await.wrap(location!())
 }

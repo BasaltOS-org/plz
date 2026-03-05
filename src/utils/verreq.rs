@@ -166,7 +166,7 @@ impl VerReq {
         match kind as u8 {
             0 => Ok(Self::NoBound),
             kind => {
-                let version = Version::parse(&data).wrap()?;
+                let version = Version::parse(&data).wrap(location!())?;
                 match kind {
                     1 => Ok(Self::Gt(version)),
                     2 => Ok(Self::Ge(version)),

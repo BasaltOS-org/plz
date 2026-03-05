@@ -29,7 +29,7 @@ async fn run_internal(
     states: &StateBox,
     args: Option<&[String]>,
 ) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap()? {
+    if let Some(action) = acquire_lock().await.wrap(location!())? {
         return Ok(action);
     };
     let mut args = match args {
@@ -37,7 +37,10 @@ async fn run_internal(
         Some(args) => args.iter(),
     };
     print!("Reading sources...");
-    let sources = SettingsJson::get_settings().await.wrap()?.sources;
+    let sources = SettingsJson::get_settings()
+        .await
+        .wrap(location!())?
+        .sources;
     if sources.is_empty() {
         return Ok(PostAction::PullSources);
     }
@@ -51,7 +54,7 @@ async fn run_internal(
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    let data = get_packages(&data).await.wrap()?;
+    let data = get_packages(&data).await.wrap(location!())?;
     println!();
     if data.is_empty() {
         return Ok(PostAction::NothingToDo);
@@ -70,7 +73,9 @@ async fn run_internal(
                 .fold(String::new(), |acc, x| format!("{acc} {x}"))
                 .trim()
         );
-        if states.get("yes").is_none_or(|x: &bool| !*x) && !choice("Continue?", true).wrap()? {
+        if states.get("yes").is_none_or(|x: &bool| !*x)
+            && !choice("Continue?", true).wrap(location!())?
+        {
             return Err(WrappedError::Other {
                 error: "Operation aborted by user.".into(),
                 loc: location!(),
@@ -78,7 +83,7 @@ async fn run_internal(
         }
     }
     for data in data {
-        data.install().await.wrap()?;
+        data.install().await.wrap(location!())?;
     }
     Ok(PostAction::Return)
 }

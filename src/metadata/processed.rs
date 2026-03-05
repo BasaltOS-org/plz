@@ -34,8 +34,10 @@ impl ProcessedInstallKind {
         })?;
         let data = chars.collect::<String>();
         match kind as u8 {
-            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap()?)),
-            1 => Ok(Self::Compilable(ProcessedCompilable::parse(&data).wrap()?)),
+            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap(location!())?)),
+            1 => Ok(Self::Compilable(
+                ProcessedCompilable::parse(&data).wrap(location!())?,
+            )),
             kind => Err(WrappedError::Other {
                 error: format!("Invalid kind identifier `{kind}`!").into(),
                 loc: location!(),
@@ -225,16 +227,16 @@ impl ProcessedMetaData {
         for dependent in metadata.dependents.0.iter_mut() {
             let their_metadata = InstalledMetaData::open(&dependent.name, pool)
                 .await
-                .wrap()?
+                .wrap(location!())?
                 .context(OtherSnafu {
                     error: format!("Failed to locate `{}`!", self.name),
                 })?;
             *dependent = Specific {
                 name: dependent.name.to_string(),
-                version: Version::parse(&their_metadata.version).wrap()?,
+                version: Version::parse(&their_metadata.version).wrap(location!())?,
             }
         }
-        let tmpfile = tmpfile().await.wrap()?;
+        let tmpfile = tmpfile().await.wrap(location!())?;
         let mut file = File::create(&tmpfile.0).await.context(TokioIOSnafu)?;
         let endpoint = match self.origin {
             OriginKind::Plz(plz) => format!("{plz}?v={}", self.version),
@@ -283,10 +285,12 @@ impl ProcessedMetaData {
                     .context(TokioIOSnafu)?;
             }
         }
-        metadata.write(pool).await.wrap()?;
+        metadata.write(pool).await.wrap(location!())?;
         for dep in deps.0 {
-            let dep = dep.get_installed_specific(pool).await.wrap()?;
-            dep.write_dependent(&name, &ver, pool).await.wrap()?;
+            let dep = dep.get_installed_specific(pool).await.wrap(location!())?;
+            dep.write_dependent(&name, &ver, pool)
+                .await
+                .wrap(location!())?;
         }
         Ok(())
     }
@@ -305,7 +309,7 @@ impl ProcessedMetaData {
         //         action: IOAction::CreateFile,
         //         loc: path.display().to_string(),
         //     })
-        //     .wrap()?;
+        //     .wrap(location!())?;
         // query_as!(Self, "INSERT INTO installed VALUES ?", &self)
         //     .execute(&pool)
         //     .await?;
@@ -327,42 +331,42 @@ impl ProcessedMetaData {
         //     .context(JSONSnafu {
         //         loc: self.name.to_string(),
         //     })
-        //     .wrap()?;
+        //     .wrap(location!())?;
         // file.write_all(data.as_bytes())
         //     .context(IOSnafu {
         //         action: IOAction::WriteFile,
         //         loc: path.display().to_string(),
         //     })
-        //     .wrap()?;
+        //     .wrap(location!())?;
         Ok(self)
     }
     pub async fn open(name: &str, pool: &SqlitePool) -> Result<Self, WrappedError> {
-        // let mut path = get_update_dir().wrap()?;
+        // let mut path = get_update_dir().wrap(location!())?;
         // path.push(format!("{}.json", name));
         // let mut file = File::open(&path)
         //     .context(IOSnafu {
         //         action: IOAction::OpenFile,
         //         loc: path.display().to_string(),
         //     })
-        //     .wrap()?;
+        //     .wrap(location!())?;
         // let mut metadata = String::new();
         // file.read_to_string(&mut metadata)
         //     .context(IOSnafu {
         //         action: IOAction::ReadFile,
         //         loc: path.display().to_string(),
         //     })
-        //     .wrap()?;
+        //     .wrap(location!())?;
         // serde_json::from_str::<Self>(&metadata)
         //     .context(JSONSnafu {
         //         loc: path.display().to_string(),
         //     })
-        //     .wrap()
+        //     .wrap(location!())
         query_as::<Sqlite, ProcessedMetaData>("SELECT * FROM updates WHERE name = ?")
             .bind(name)
             .fetch_one(pool)
             .await
             .context(SQLSnafu)
-            .wrap()
+            .wrap(location!())
     }
     pub async fn get_metadata(
         name: &str,
@@ -419,7 +423,7 @@ impl ProcessedMetaData {
                     };
                     metadata = RawApt::parse(source, code, kind, name, &ver.0, dependent, pool)
                         .await
-                        .wrap();
+                        .wrap(location!());
                     break;
                 }
             }
@@ -427,13 +431,13 @@ impl ProcessedMetaData {
         metadata
     }
     pub async fn remove_update_cache(&self, pool: &SqlitePool) -> Result<(), WrappedError> {
-        // let path = get_update_dir().wrap()?;
+        // let path = get_update_dir().wrap(location!())?;
         // let dir = fs::read_dir(&path)
         //     .context(IOSnafu {
         //         action: IOAction::ReadDir,
         //         loc: path.display().to_string(),
         //     })
-        //     .wrap()?;
+        //     .wrap(location!())?;
         // for file in dir.flatten() {
         //     let path = file.path();
         //     if let Some(name) = path.file_prefix() {
@@ -445,7 +449,7 @@ impl ProcessedMetaData {
         //                     action: IOAction::RemoveFile,
         //                     loc: path.display().to_string(),
         //                 })
-        //                 .wrap();
+        //                 .wrap(location!());
         //         }
         //     }
         // }
@@ -474,11 +478,11 @@ impl ProcessedMetaData {
         package.build_deps =
             DependKind::batch_as_installed(&metadata.build_dependencies, sources, prior, pool)
                 .await
-                .wrap()?;
+                .wrap(location!())?;
         package.run_deps =
             DependKind::batch_as_installed(&metadata.runtime_dependencies, sources, prior, pool)
                 .await
-                .wrap()?;
+                .wrap(location!())?;
         Ok(package)
     }
     pub async fn upgrade_package(
@@ -486,8 +490,8 @@ impl ProcessedMetaData {
         sources: &[OriginKind],
         pool: &SqlitePool,
     ) -> Result<(), WrappedError> {
-        let version = Version::parse(&self.version).wrap()?;
-        let specific = self.as_specific().wrap()?;
+        let version = Version::parse(&self.version).wrap(location!())?;
+        let specific = self.as_specific().wrap(location!())?;
         let Ok(Some(installed)) = InstalledMetaData::open(&self.name, pool).await else {
             println!(
                 "\x1B[33m[WARN] Skipping `{}`\x1B[0m (This is likely the result of a stale cache)...",
@@ -533,60 +537,61 @@ impl ProcessedMetaData {
         let children = {
             let mut s_children = Vec::new();
             for child in children {
-                s_children.push(child.await.wrap()?);
+                s_children.push(child.await.wrap(location!())?);
             }
             s_children
         };
         for child in children.into_iter() {
-            child.install_package(pool).await.wrap()?;
+            child.install_package(pool).await.wrap(location!())?;
         }
         for stale in stale_installed {
             stale
                 .get_installed_specific(pool)
                 .await
-                .wrap()?
+                .wrap(location!())?
                 .remove(false, Some(pool))
                 .await
-                .wrap()?;
+                .wrap(location!())?;
         }
         for dep in new_deps {
             if let Some(dep_ver) = dep.as_dep_ver() {
                 let installed_metadata = InstalledMetaData::open(&dep_ver.name, pool)
                     .await
-                    .wrap()?
+                    .wrap(location!())?
                     .context(OtherSnafu {
                         error: format!("Failed to locate `{}`!", self.name),
                     })?;
                 let metadata = dep_ver
                     .pull_metadata(Some(sources), installed_metadata.dependent, pool)
                     .await
-                    .wrap()?;
-                metadata.install_package(pool).await.wrap()?;
+                    .wrap(location!())?;
+                metadata.install_package(pool).await.wrap(location!())?;
             }
         }
         for package in in_place_upgrade {
             if let Some(dep_ver) = package.as_dep_ver() {
                 let name = dep_ver.name.to_string();
-                let metadata = get_installed_metadata(&name, pool).await.wrap()?;
+                let metadata = get_installed_metadata(&name, pool)
+                    .await
+                    .wrap(location!())?;
                 let old_metadata = metadata
                     .context(OtherSnafu {
                         error: "Cannot find data for package `{name}`!",
                     })
-                    .wrap()?;
+                    .wrap(location!())?;
                 let metadata = dep_ver
                     .pull_metadata(Some(sources), old_metadata.dependent, pool)
                     .await
-                    .wrap()?;
+                    .wrap(location!())?;
                 if metadata.version != old_metadata.version {
-                    metadata.install_package(pool).await.wrap()?;
+                    metadata.install_package(pool).await.wrap(location!())?;
                 }
-                let mut metadata =
-                    InstalledMetaData::open(&name, pool)
-                        .await
-                        .wrap()?
-                        .context(OtherSnafu {
-                            error: format!("Failed to locate `{}`!", self.name),
-                        })?;
+                let mut metadata = InstalledMetaData::open(&name, pool)
+                    .await
+                    .wrap(location!())?
+                    .context(OtherSnafu {
+                        error: format!("Failed to locate `{}`!", self.name),
+                    })?;
                 if let Some(found) = metadata
                     .dependents
                     .0
@@ -597,16 +602,16 @@ impl ProcessedMetaData {
                 } else {
                     metadata.dependents.0.push(specific.clone());
                 };
-                metadata.write(pool).await.wrap()?;
+                metadata.write(pool).await.wrap(location!())?;
             }
         }
-        self.clone().install_package(pool).await.wrap()?;
+        self.clone().install_package(pool).await.wrap(location!())?;
         Ok(())
     }
     pub fn as_specific(&self) -> Result<Specific, WrappedError> {
         Ok(Specific {
             name: self.name.to_string(),
-            version: Version::parse(&self.version).wrap()?,
+            version: Version::parse(&self.version).wrap(location!())?,
         })
     }
 }

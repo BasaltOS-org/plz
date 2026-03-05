@@ -1,3 +1,5 @@
+use snafu::location;
+
 use crate::commands::Command;
 use crate::errors::{Wrapped, WrappedError};
 use crate::metadata::collect_updates;
@@ -27,9 +29,9 @@ async fn internal_run(
     _states: &StateBox,
     _args: Option<&[String]>,
 ) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap()? {
+    if let Some(action) = acquire_lock().await.wrap(location!())? {
         return Ok(action);
     };
-    collect_updates().await.wrap()?;
+    collect_updates().await.wrap(location!())?;
     Ok(PostAction::Return)
 }

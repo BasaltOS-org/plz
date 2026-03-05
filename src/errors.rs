@@ -79,37 +79,37 @@ pub enum WrappedError {
         #[snafu(implicit)]
         loc: Location,
     },
-    #[snafu(display("{error}@{loc}"))]
+    #[snafu(display("{error} @ {loc}"))]
     Other {
         error: Cow<'static, str>,
         #[snafu(implicit)]
         loc: Location,
     },
-    #[snafu(display("{source}@{loc}"))]
+    #[snafu(display("{source} @ {loc}"))]
     JSON {
         source: serde_json::Error,
         #[snafu(implicit)]
         loc: Location,
     },
-    #[snafu(display("{source}@{loc}"))]
+    #[snafu(display("{source} @ {loc}"))]
     Net {
         source: reqwest::Error,
         #[snafu(implicit)]
         loc: Location,
     },
-    #[snafu(display("{source}@{loc}"))]
+    #[snafu(display("{source} @ {loc}"))]
     StdIO {
         source: std::io::Error,
         #[snafu(implicit)]
         loc: Location,
     },
-    #[snafu(display("{source}@{loc}"))]
+    #[snafu(display("{source} @ {loc}"))]
     SQL {
         source: sqlx::Error,
         #[snafu(implicit)]
         loc: Location,
     },
-    #[snafu(display("{source}@{loc}"))]
+    #[snafu(display("{source} @ {loc}"))]
     TokioIO {
         source: tokio::io::Error,
         #[snafu(implicit)]
@@ -119,25 +119,23 @@ pub enum WrappedError {
 
 pub trait Wrapped<T> {
     #[track_caller]
-    fn wrap(self) -> Result<T, WrappedError>;
+    fn wrap(self, loc: Location) -> Result<T, WrappedError>;
     #[track_caller]
-    fn wrap_with(self, msg: MyStr) -> Result<T, WrappedError>;
+    fn wrap_with(self, msg: MyStr, loc: Location) -> Result<T, WrappedError>;
 }
 
 impl<T> Wrapped<T> for Result<T, WrappedError> {
-    #[track_caller]
-    fn wrap(self) -> Result<T, WrappedError> {
+    fn wrap(self, loc: Location) -> Result<T, WrappedError> {
         self.map_err(|e| WrappedError::Nested {
             source: Box::new(e),
-            loc: std::panic::Location::caller(),
+            loc,
         })
     }
-    #[track_caller]
-    fn wrap_with(self, msg: MyStr) -> Result<T, WrappedError> {
+    fn wrap_with(self, msg: MyStr, loc: Location) -> Result<T, WrappedError> {
         self.map_err(|e| WrappedError::Wrapped {
             source: Box::new(e),
             msg,
-            loc: std::panic::Location::caller(),
+            loc,
         })
     }
 }

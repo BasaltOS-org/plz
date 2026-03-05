@@ -29,7 +29,7 @@ async fn internal_run(
     states: &StateBox,
     args: Option<&[String]>,
 ) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap()? {
+    if let Some(action) = acquire_lock().await.wrap(location!())? {
         return Ok(action);
     };
     let args = if let Some(args) = args {
@@ -53,7 +53,7 @@ async fn internal_run(
     } else {
         upgrade_only(&args)
     }
-    .wrap()?;
+    .wrap(location!())?;
     if data.is_empty() {
         return Ok(PostAction::NothingToDo);
     }
@@ -63,12 +63,14 @@ async fn internal_run(
             .fold(String::new(), |acc, x| format!("{acc} {}", x.name))
             .trim()
     );
-    if states.get("yes").is_none_or(|x: &bool| !*x) && !choice("Continue?", true).wrap()? {
+    if states.get("yes").is_none_or(|x: &bool| !*x)
+        && !choice("Continue?", true).wrap(location!())?
+    {
         return Err(WrappedError::Other {
             error: "Operation aborted by user.".into(),
             loc: location!(),
         });
     };
-    upgrade_packages(&data).await.wrap()?;
+    upgrade_packages(&data).await.wrap(location!())?;
     Ok(PostAction::Return)
 }
