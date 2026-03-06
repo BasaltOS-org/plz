@@ -195,7 +195,7 @@ impl Command {
                 .await
                 .wrap(location!())
             {
-                println!("{e:?}")
+                println!("{e}")
             };
         }
     }

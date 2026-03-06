@@ -29,7 +29,7 @@ pub fn build(hierarchy: &[String]) -> Command {
 
 pub async fn set_handle(states: &mut StateBox, arg: Option<String>) {
     if let Err(error) = internal_set_handle(states, arg).await {
-        println!("{error:?}")
+        println!("{error}")
     }
 }
 async fn internal_set_handle(

@@ -349,9 +349,6 @@ pub async fn acquire_lock() -> Result<Option<PostAction>, WrappedError> {
             break;
         }
     }
-    if settings.sources.is_empty() {
-        return Ok(Some(PostAction::PullSources));
-    }
     settings.locked = true;
     settings.set_settings().await.wrap(location!())?;
     Ok(None)
