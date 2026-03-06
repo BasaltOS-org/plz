@@ -343,6 +343,7 @@ impl Command {
                 println!(
                     "\x1B[2K\rOperation failed! Reported Error: \"\x1B[91m{fault}\x1B[0m\"\n\x1B[91m=== YOU MAY HAVE BROKEN PACKAGES! ===\x1B[0m",
                 );
+                std::process::exit(1);
             }
             PostAction::GetHelp => println!("{}", self.help()),
             PostAction::NothingToDo => println!("\x1B[95mNothing to do.\x1B[0m"),
