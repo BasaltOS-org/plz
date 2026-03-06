@@ -8,7 +8,6 @@ use std::{
 };
 use tokio::{fs::File, io::AsyncWriteExt, process::Command as RunCommand};
 
-use crate::errors::{NetSnafu, OtherSnafu, SQLSnafu, TokioIOSnafu, Wrapped, WrappedError};
 use crate::metadata::{
     DepVer, DependKind, InstallPackage, InstalledMetaData, MetaDataKind, Specific,
     depend_kind::DependKindVec,
@@ -19,6 +18,10 @@ use crate::metadata::{
 };
 use crate::settings::{Arch, OriginKind};
 use crate::utils::{tmpfile, version::Version};
+use crate::{
+    errors::{NetSnafu, OtherSnafu, SQLSnafu, TokioIOSnafu, Wrapped, WrappedError},
+    settings::SettingsJson,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum ProcessedInstallKind {
@@ -267,8 +270,9 @@ impl ProcessedMetaData {
                 }); //thingy
             }
             ProcessedInstallKind::Compilable(compilable) => {
+                let shell = SettingsJson::get_settings().await.wrap(location!())?.shell;
                 let build = compilable.build.replace("{$~}", &tmpfile.1);
-                let mut command = RunCommand::new("/usr/bin/bash");
+                let mut command = RunCommand::new(shell.to_string());
                 command
                     .arg("-c")
                     .arg(build)
@@ -276,7 +280,7 @@ impl ProcessedMetaData {
                     .await
                     .context(TokioIOSnafu)?;
                 let install = compilable.install.replace("{$~}", &tmpfile.1);
-                let mut command = RunCommand::new("/usr/bin/bash");
+                let mut command = RunCommand::new(shell.to_string());
                 command
                     .arg("-c")
                     .arg(install)

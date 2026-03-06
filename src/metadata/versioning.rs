@@ -368,6 +368,7 @@ impl Specific {
                 }); //thingy
             }
             InstalledInstallKind::Compilable(compilable) => {
+                let shell = SettingsJson::get_settings().await.wrap(location!())?.shell;
                 // I'm not sure if the `purge` script is run IN PLACE OF, or
                 // AFTER the `uninstall` script. This is due to change.
                 let (script, msg) = if purge {
@@ -375,7 +376,7 @@ impl Specific {
                 } else {
                     (compilable.uninstall, "Removal")
                 };
-                let mut command = Command::new("/usr/bin/bash");
+                let mut command = Command::new(shell.to_string());
                 if !command
                     .arg("-c")
                     .arg(script)

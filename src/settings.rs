@@ -8,12 +8,16 @@ use tokio::{
     time::Duration,
 };
 
-use crate::errors::{JSONSnafu, OtherSnafu, TokioIOSnafu, Wrapped, WrappedError};
 use crate::utils::{PostAction, get_dir, is_root};
+use crate::{
+    errors::{JSONSnafu, OtherSnafu, TokioIOSnafu, Wrapped, WrappedError},
+    utils::which,
+};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct SettingsJson {
     pub locked: bool,
+    pub shell: ShellType,
     pub version: String,
     pub arch: Arch,
     pub exec: Option<String>,
@@ -21,8 +25,22 @@ pub struct SettingsJson {
 }
 
 impl SettingsJson {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, WrappedError> {
         let mut command = std::process::Command::new("/usr/bin/uname");
+        let shell = if which("fish") {
+            ShellType::Fish
+        } else if which("bash") {
+            ShellType::Bash
+        } else if which("ash") {
+            ShellType::Ash
+        } else if which("sh") {
+            ShellType::Sh
+        } else {
+            return Err(WrappedError::Other {
+                error: "No compatible shell interpreters installed!".into(),
+                loc: location!(),
+            });
+        };
         let arch = if let Ok(output) = command.arg("-m").output() {
             match String::from_utf8_lossy(&output.stdout)
                 .to_string()
@@ -54,19 +72,20 @@ impl SettingsJson {
         } else {
             Arch::NoArch
         };
-        Self {
+        Ok(Self {
             locked: false,
+            shell,
             version: env!("SETTINGS_JSON_VERSION").to_string(),
             arch,
             exec: None,
             sources: Vec::new(),
-        }
+        })
     }
-    pub async fn set_settings(self) -> Result<(), WrappedError> {
+    pub async fn set_settings(&self) -> Result<(), WrappedError> {
         let mut file = File::create(affirm_path().await.wrap(location!())?)
             .await
             .context(TokioIOSnafu)?;
-        let settings = serde_json::to_string(&self).context(JSONSnafu)?;
+        let settings = serde_json::to_string(self).context(JSONSnafu)?;
         file.write_all(settings.as_bytes())
             .await
             .context(TokioIOSnafu)
@@ -81,12 +100,17 @@ impl SettingsJson {
             .context(TokioIOSnafu)?;
         serde_json::from_str(&sources).context(JSONSnafu)
     }
-}
+    // async fn shell(&mut self) -> Result<String, WrappedError> {
+    //     match self.shell {
+    //         ShellType::Fish => Ok(String::from("fish")),
+    //         ShellType::Bash => Ok(String::from("bash")),
+    //         ShellType::Ash => Ok(String::from("ash")),
+    //         ShellType::Sh => Ok(String::from("sh")),
+    //         ShellType::None => {
 
-impl Default for SettingsJson {
-    fn default() -> Self {
-        Self::new()
-    }
+    //         }
+    //     }
+    // }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -251,7 +275,8 @@ async fn affirm_path() -> Result<PathBuf, WrappedError> {
     path.push("settings.json");
     if !path.exists() {
         let mut file = File::create(&path).await.context(TokioIOSnafu)?;
-        let new_settings = serde_json::to_string(&SettingsJson::new()).context(JSONSnafu)?;
+        let new_settings =
+            serde_json::to_string(&SettingsJson::new().wrap(location!())?).context(JSONSnafu)?;
 
         file.write_all(new_settings.as_bytes())
             .await
@@ -336,4 +361,22 @@ pub async fn remove_lock() -> Result<(), WrappedError> {
     let mut settings = SettingsJson::get_settings().await.wrap(location!())?;
     settings.locked = false;
     settings.set_settings().await.wrap(location!())
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub enum ShellType {
+    Fish,
+    Bash,
+    Ash,
+    Sh,
+}
+impl Display for ShellType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Fish => "fish",
+            Self::Bash => "bash",
+            Self::Ash => "ash",
+            Self::Sh => "sh",
+        })
+    }
 }
