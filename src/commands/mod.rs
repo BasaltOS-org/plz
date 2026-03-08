@@ -346,7 +346,7 @@ impl Command {
                 std::process::exit(1);
             }
             PostAction::GetHelp => println!("{}", self.help()),
-            PostAction::NothingToDo => println!("\x1B[95mNothing to do.\x1B[0m"),
+            PostAction::NothingToDo(reason) => println!("\x1B[95m{reason}\x1B[0m"),
             PostAction::PullSources => {
                 match choice("\x1B[2K\rMissing sources.txt! Try pull them now?", false) {
                     Err(message) => println!("{message}"),

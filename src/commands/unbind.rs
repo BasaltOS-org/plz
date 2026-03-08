@@ -33,7 +33,7 @@ async fn internal_run(
         return Ok(action);
     };
     let mut args = match args {
-        None => return Ok(PostAction::NothingToDo),
+        None => return Ok(PostAction::NothingToDo("Nothing to do.")),
         Some(args) => args.iter(),
     };
     let mut data = Vec::new();

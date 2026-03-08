@@ -33,7 +33,7 @@ async fn run_internal(
         return Ok(action);
     };
     let mut args = match args {
-        None => return Ok(PostAction::NothingToDo),
+        None => return Ok(PostAction::NothingToDo("Nothing to do.")),
         Some(args) => args.iter(),
     };
     print!("Reading sources...");
@@ -57,7 +57,7 @@ async fn run_internal(
     let data = get_packages(&data).await.wrap(location!())?;
     println!();
     if data.is_empty() {
-        return Ok(PostAction::NothingToDo);
+        return Ok(PostAction::NothingToDo("Nothing to do."));
     }
     println!(
         "\nThe following package(s) will be INSTALLED: \x1B[92m{}\x1B[0m",
@@ -76,10 +76,7 @@ async fn run_internal(
         if states.get("yes").is_none_or(|x: &bool| !*x)
             && !choice("Continue?", true).wrap(location!())?
         {
-            return Err(WrappedError::Other {
-                error: "Operation aborted by user.".into(),
-                loc: location!(),
-            });
+            return Ok(PostAction::NothingToDo("Operation aborted by user."));
         }
     }
     for data in data {

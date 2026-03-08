@@ -54,7 +54,7 @@ async fn internal_run(
         return Ok(action);
     };
     let mut args = match args {
-        None => return Ok(PostAction::NothingToDo),
+        None => return Ok(PostAction::NothingToDo("Nothing to do.")),
         Some(args) => args.iter(),
     };
     let mut data = Vec::new();
@@ -67,10 +67,12 @@ async fn internal_run(
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    let metadatas = get_local_pkgs(&data).await.wrap(location!())?;
+    let Some(metadatas) = get_local_pkgs(&data).await.wrap(location!())? else {
+        return Ok(PostAction::NothingToDo("Package not installed."));
+    };
     println!();
     if metadatas.is_empty() {
-        return Ok(PostAction::NothingToDo);
+        return Ok(PostAction::NothingToDo("Nothing to do."));
     }
     let msg = if purge { "PURGED: " } else { "REMOVED:" };
     println!(
@@ -94,10 +96,7 @@ async fn internal_run(
             match choice("Continue?", true) {
                 Err(source) => return Err(source),
                 Ok(false) => {
-                    return Err(WrappedError::Other {
-                        error: "Operation aborted by user.".into(),
-                        loc: location!(),
-                    });
+                    return Ok(PostAction::NothingToDo("Operation aborted by user."));
                 }
                 Ok(true) => (),
             };

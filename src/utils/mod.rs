@@ -17,7 +17,7 @@ pub enum PostAction {
     Err(i32),
     Fuck(WrappedError),
     GetHelp,
-    NothingToDo,
+    NothingToDo(&'static str),
     PullSources,
     Return,
 }

@@ -234,7 +234,7 @@ async fn get_package(
 /* #region Remove/Purge */
 pub async fn get_local_pkgs(
     args: &[(&String, Option<&String>)],
-) -> Result<QueuedChanges, WrappedError> {
+) -> Result<Option<QueuedChanges>, WrappedError> {
     let pool = get_pool().await.wrap(location!())?;
     print!("\x1B[2K\rCollecting packages... 0%");
     let mut seen = HashSet::new();
@@ -242,11 +242,18 @@ pub async fn get_local_pkgs(
     let mut result = QueuedChanges::new();
     for (i, dep) in args.iter().enumerate() {
         print!("\rCollecting packages... {}% ", i * 100 / count);
-        result.extend(get_local_pkg(dep, &mut seen, true, &pool).await?);
+        if let Some(package) = get_local_pkg(dep, &mut seen, true, &pool)
+            .await
+            .wrap(location!())?
+        {
+            result.extend(package);
+        } else {
+            return Ok(None);
+        }
     }
     print!("\rCollecting packages... Done!");
     result.dependents(&pool).await.wrap(location!())?;
-    Ok(result)
+    Ok(Some(result))
 }
 
 async fn get_local_pkg(
@@ -254,7 +261,7 @@ async fn get_local_pkg(
     prior: &mut HashSet<String>,
     root: bool,
     pool: &SqlitePool,
-) -> Result<QueuedChanges, WrappedError> {
+) -> Result<Option<QueuedChanges>, WrappedError> {
     let (dep, ver) = *dep;
     let data = match InstalledMetaData::open(dep, pool)
         .await
@@ -265,10 +272,7 @@ async fn get_local_pkg(
         Ok(data) => data,
         fault => {
             if root {
-                fault.wrap_with(
-                    "Attempted to remove a package that isn't installed!".into(),
-                    location!(),
-                )?
+                return Ok(None);
             } else {
                 fault.wrap(location!())?
             }
@@ -303,7 +307,9 @@ async fn get_local_pkg(
             .wrap_with(
                 format!("Nested loop for package `{}`.", version.name).into(),
                 location!(),
-            )?;
+            )?
+            .unwrap_or_default();
+            // let items = items.unwrap_or_default();
             result.extend(items);
             result.insert_secondary(dep);
         }
@@ -314,7 +320,7 @@ async fn get_local_pkg(
             });
         }
     }
-    Ok(result)
+    Ok(Some(result))
 }
 
 /* #endregion Remove/Purge */

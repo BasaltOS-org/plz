@@ -55,7 +55,7 @@ async fn internal_run(
     }
     .wrap(location!())?;
     if data.is_empty() {
-        return Ok(PostAction::NothingToDo);
+        return Ok(PostAction::NothingToDo("Nothing to do."));
     }
     println!(
         "The following package(s) will be UPGRADED: \x1B[94m{}\x1B[0m",
@@ -66,10 +66,7 @@ async fn internal_run(
     if states.get("yes").is_none_or(|x: &bool| !*x)
         && !choice("Continue?", true).wrap(location!())?
     {
-        return Err(WrappedError::Other {
-            error: "Operation aborted by user.".into(),
-            loc: location!(),
-        });
+        return Ok(PostAction::NothingToDo("Operation aborted by user."));
     };
     upgrade_packages(&data).await.wrap(location!())?;
     Ok(PostAction::Return)
