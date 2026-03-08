@@ -58,7 +58,7 @@ To continue anyway, run with flag `\x1B[35m--{LONG_NAME}\x1B[0m`."
 }
 
 async fn gen_sources() -> Result<(), WrappedError> {
-    let url = "about:blank#blocked";
+    let url = "https://resources.ditherdude.dev/sources.txt";
     let sources = reqwest::get(url).await.context(NetSnafu)?;
     let sources = sources.text().await.context(NetSnafu)?;
     let mut settings = SettingsJson::get_settings().await.wrap(location!())?;

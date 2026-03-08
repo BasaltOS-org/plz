@@ -31,6 +31,8 @@ impl SettingsJson {
             ShellType::Fish
         } else if which("bash") {
             ShellType::Bash
+        } else if which("zsh") {
+            ShellType::Zsh
         } else if which("ash") {
             ShellType::Ash
         } else if which("sh") {
@@ -138,15 +140,13 @@ impl OriginKind {
         match kind as u8 {
             0 => {
                 let mut splits = data.split(' ');
-                let source = splits.next().context(OtherSnafu {
-                    error: "Missing APT field `source`!",
-                })?;
-                let code = splits.next().context(OtherSnafu {
-                    error: "Missing APT field `code`!",
-                })?;
-                let kind = splits.next().context(OtherSnafu {
-                    error: "Missing APT field `kind`!",
-                })?;
+                let ((source, code), kind) = splits
+                    .next()
+                    .zip(splits.next())
+                    .zip(splits.next())
+                    .context(OtherSnafu {
+                        error: "Missing required APT fields!",
+                    })?;
                 let kind = match kind {
                     "main" => AptKind::Main,
                     "multiverse" => AptKind::Multiverse,
@@ -363,17 +363,21 @@ pub async fn remove_lock() -> Result<(), WrappedError> {
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub enum ShellType {
     Fish,
+    Zsh,
     Bash,
     Ash,
     Sh,
+    Custom(String),
 }
 impl Display for ShellType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Fish => "fish",
+            Self::Zsh => "zsh",
             Self::Bash => "bash",
             Self::Ash => "ash",
             Self::Sh => "sh",
+            Self::Custom(custom) => custom,
         })
     }
 }
