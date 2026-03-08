@@ -8,7 +8,10 @@ use tokio::{
     time::Duration,
 };
 
-use crate::utils::{PostAction, get_dir, is_root};
+use crate::{
+    errors::StdIOSnafu,
+    utils::{PostAction, get_dir, is_root},
+};
 use crate::{
     errors::{JSONSnafu, OtherSnafu, TokioIOSnafu, Wrapped, WrappedError},
     utils::which,
@@ -26,7 +29,6 @@ pub struct SettingsJson {
 
 impl SettingsJson {
     pub fn new() -> Result<Self, WrappedError> {
-        let mut command = std::process::Command::new("/usr/bin/uname");
         let shell = if which("fish") {
             ShellType::Fish
         } else if which("bash") {
@@ -43,6 +45,7 @@ impl SettingsJson {
                 loc: location!(),
             });
         };
+        let mut command = std::process::Command::new("uname");
         let arch = if let Ok(output) = command.arg("-m").output() {
             match String::from_utf8_lossy(&output.stdout)
                 .to_string()
@@ -50,20 +53,30 @@ impl SettingsJson {
                 .trim()
             {
                 "x86_64" => {
-                    let mut command = std::process::Command::new("/usr/bin/bash");
-                    command.arg("-c").arg("(lscpu|grep -q avx512f&&echo 4&&exit||lscpu|grep -q avx2&&echo 3&&exit||lscpu|grep -q sse4_2&&echo 2&&exit||echo 1)");
-                    if let Ok(output) = command.output() {
-                        match String::from_utf8_lossy(&output.stdout)
-                            .to_string()
-                            .as_str()
-                            .trim()
-                        {
-                            "4" | "3" => Arch::X86_64v3,
-                            "2" | "1" => Arch::X86_64v1,
-                            _ => Arch::NoArch,
-                        }
+                    let mut command = std::process::Command::new("cat");
+                    command.arg("/proc/cpuinfo");
+                    let output = command.output().context(StdIOSnafu)?;
+                    let splits = String::from_utf8_lossy(&output.stdout);
+                    let splits = splits.split_whitespace().collect::<Vec<&str>>();
+                    if ["avx512f", "avx512bw", "avx512cd", "avx512dq", "avx512vl"]
+                        .iter()
+                        .all(|x| splits.contains(x))
+                    {
+                        Arch::X86_64v4
+                    } else if [
+                        "avx", "avx2", "bmi1", "bmi2", "f16c", "fma", "abm", "movbe", "xsave",
+                    ]
+                    .iter()
+                    .all(|x| splits.contains(x))
+                    {
+                        Arch::X86_64v3
+                    } else if ["cx16", "lahf", "popcnt", "sse4_1", "sse4_2", "ssse3"]
+                        .iter()
+                        .all(|x| splits.contains(x))
+                    {
+                        Arch::X86_64v2
                     } else {
-                        Arch::NoArch
+                        Arch::X86_64
                     }
                 }
                 "aarch64" => Arch::Aarch64,
@@ -247,8 +260,10 @@ impl Display for AptKind {
 #[derive(Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Arch {
     Any,
-    X86_64v1,
+    X86_64,
+    X86_64v2,
     X86_64v3,
+    X86_64v4,
     Aarch64,
     Armv7l,
     Armv8l,
@@ -260,7 +275,9 @@ impl Arch {
         let installed = SettingsJson::get_settings().await.wrap(location!())?.arch;
         match self {
             Self::Any => Ok(true),
-            Self::X86_64v1 => Ok([Self::X86_64v1, Self::X86_64v3].contains(&installed)),
+            Self::X86_64 => Ok(
+                [Self::X86_64, Self::X86_64v2, Self::X86_64v3, Self::X86_64v4].contains(&installed),
+            ),
             Self::NoArch => Err(WrappedError::Other {
                 error: format!("Unrecognized architecture in package {name}!").into(),
                 loc: location!(),

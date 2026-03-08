@@ -235,7 +235,7 @@ impl RawApt {
     fn get_arch(arch: &str) -> Arch {
         match arch {
             "all" | "any" => Arch::Any,
-            "amd64" => Arch::X86_64v1,
+            "amd64" => Arch::X86_64,
             "arm64" => Arch::Aarch64,
             _ => Arch::NoArch,
         }
