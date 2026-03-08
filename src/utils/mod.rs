@@ -12,6 +12,7 @@ pub mod verreq;
 pub mod version;
 
 // The action to perform once a command has run
+#[derive(PartialEq)]
 pub enum PostAction {
     Elevate,
     Err(i32),

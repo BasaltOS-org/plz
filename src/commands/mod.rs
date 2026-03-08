@@ -318,7 +318,9 @@ impl Command {
     }
 
     async fn handle_post_action(&self, action: PostAction) -> Result<(), WrappedError> {
-        remove_lock().await.wrap(location!())?;
+        if action != PostAction::Elevate {
+            remove_lock().await.wrap(location!())?;
+        }
         match action {
             PostAction::Elevate => {
                 println!(

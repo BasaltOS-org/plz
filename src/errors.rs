@@ -116,6 +116,11 @@ pub enum WrappedError {
         loc: Location,
     },
 }
+impl PartialEq for WrappedError {
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
+}
 
 pub trait Wrapped<T> {
     #[track_caller]

@@ -68,7 +68,7 @@ async fn internal_run(
         args.for_each(|x| data.push((x, None)));
     }
     let Some(metadatas) = get_local_pkgs(&data).await.wrap(location!())? else {
-        return Ok(PostAction::NothingToDo("Package not installed."));
+        return Ok(PostAction::NothingToDo("\x1B[2K\rPackage not installed."));
     };
     println!();
     if metadatas.is_empty() {
