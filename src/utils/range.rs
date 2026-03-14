@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, location};
+use serde_json::json;
+use snafu::OptionExt;
 use std::fmt::Display;
 
-use crate::errors::{OtherSnafu, Wrapped, WrappedError};
+use crate::errors::{OtherSnafu, StatefulError, Wrapped, WrappedWith};
 use crate::utils::verreq::VerReq;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -39,12 +40,15 @@ impl Range {
     pub fn negotiate(&self, prior: Option<Self>) -> Option<Self> {
         self.upper.negotiate(self.lower.negotiate(prior))
     }
-    pub fn parse(input: &str) -> Result<Self, WrappedError> {
-        let (lower, upper) = input.split_once(' ').context(OtherSnafu {
-            error: "Missing Range field `upper`!",
-        })?;
-        let lower = VerReq::parse(lower).wrap(location!())?;
-        let upper = VerReq::parse(upper).wrap(location!())?;
+    pub fn parse(input: &str) -> Result<Self, StatefulError> {
+        let (lower, upper) = input
+            .split_once(' ')
+            .context(OtherSnafu {
+                error: "Missing Range field `upper`!",
+            })
+            .wrap()?;
+        let lower = VerReq::parse(lower).wrap(&json!({"action": "parsing lower value"}))?;
+        let upper = VerReq::parse(upper).wrap(&json!({"action": "parsing upper value"}))?;
         Ok(Self { lower, upper })
     }
 }

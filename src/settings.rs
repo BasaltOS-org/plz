@@ -307,15 +307,14 @@ impl Arch {
 }
 
 async fn affirm_path() -> Result<PathBuf, StatefulError> {
-    let mut path = get_dir().await.wrap()?;
+    let cause = json!({"action": "affirming settings file exists"});
+    let mut path = get_dir().await.wrap(&cause)?;
     path.push("settings.json");
     if !path.exists() {
         let mut file = File::create(&path).await.context(TokioIOSnafu).wrap()?;
-        let new_settings = serde_json::to_string(
-            &SettingsJson::new().wrap(&json!({"action": "affirming settings file exists"}))?,
-        )
-        .context(JSONSnafu)
-        .wrap()?;
+        let new_settings = serde_json::to_string(&SettingsJson::new().wrap(&cause)?)
+            .context(JSONSnafu)
+            .wrap()?;
 
         file.write_all(new_settings.as_bytes())
             .await

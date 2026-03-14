@@ -18,7 +18,7 @@ pub enum WrappedError {
     #[snafu(display("{source}"))]
     TokioIO { source: tokio::io::Error },
 }
-impl PartialEq for WrappedError {
+impl PartialEq for StatefulError {
     fn eq(&self, _other: &Self) -> bool {
         false
     }

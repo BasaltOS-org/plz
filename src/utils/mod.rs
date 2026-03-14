@@ -1,10 +1,11 @@
 use nix::unistd;
-use snafu::{ResultExt, location};
+use serde_json::json;
+use snafu::ResultExt;
 use sqlx::{SqlitePool, query, sqlite::SqliteConnectOptions};
 use std::{io::Write, path::PathBuf, str::FromStr};
 use tokio::{fs::DirBuilder, process::Command};
 
-use crate::errors::{SQLSnafu, StdIOSnafu, TokioIOSnafu, Wrapped, WrappedError};
+use crate::errors::{SQLSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped, WrappedWith};
 use crate::flags::Flag;
 
 pub mod range;
@@ -16,7 +17,7 @@ pub mod version;
 pub enum PostAction {
     Elevate,
     Err(i32),
-    Fuck(WrappedError),
+    Fuck(StatefulError),
     GetHelp,
     NothingToDo(&'static str),
     PullSources,
@@ -25,35 +26,42 @@ pub enum PostAction {
 
 const LOC_DIR: &str = "/etc/plz";
 
-pub async fn get_dir() -> Result<PathBuf, WrappedError> {
+pub async fn get_dir() -> Result<PathBuf, StatefulError> {
     let path = PathBuf::from(LOC_DIR);
     DirBuilder::new()
         .recursive(true)
         .create(&path)
         .await
-        .context(TokioIOSnafu)?;
+        .context(TokioIOSnafu)
+        .wrap()?;
     Ok(path)
 }
 
-pub async fn get_metadata_dir() -> Result<PathBuf, WrappedError> {
-    let mut path = get_dir().await.wrap(location!())?;
+pub async fn get_metadata_dir() -> Result<PathBuf, StatefulError> {
+    let mut path = get_dir()
+        .await
+        .wrap(&json!({"action": "locating metadata directory"}))?;
     path.push("installed");
     DirBuilder::new()
         .recursive(true)
         .create(&path)
         .await
-        .context(TokioIOSnafu)?;
+        .context(TokioIOSnafu)
+        .wrap()?;
     Ok(path)
 }
 
-pub async fn get_update_dir() -> Result<PathBuf, WrappedError> {
-    let mut path = get_dir().await.wrap(location!())?;
+pub async fn get_update_dir() -> Result<PathBuf, StatefulError> {
+    let mut path = get_dir()
+        .await
+        .wrap(&json!({"action": "locating updates directory"}))?;
     path.push("updates");
     DirBuilder::new()
         .recursive(true)
         .create(&path)
         .await
-        .context(TokioIOSnafu)?;
+        .context(TokioIOSnafu)
+        .wrap()?;
     Ok(path)
 }
 
@@ -61,12 +69,13 @@ pub fn is_root() -> bool {
     unistd::geteuid().as_raw() == 0
 }
 
-pub async fn tmpfile() -> Result<(PathBuf, String), WrappedError> {
+pub async fn tmpfile() -> Result<(PathBuf, String), StatefulError> {
     let path = String::from_utf8_lossy(
         &Command::new("mktemp")
             .output()
             .await
-            .context(TokioIOSnafu)?
+            .context(TokioIOSnafu)
+            .wrap()?
             .stdout,
     )
     .trim()
@@ -74,14 +83,15 @@ pub async fn tmpfile() -> Result<(PathBuf, String), WrappedError> {
     Ok((PathBuf::from(&path), path))
 }
 
-pub async fn tmpdir() -> Result<(PathBuf, String), WrappedError> {
+pub async fn tmpdir() -> Result<(PathBuf, String), StatefulError> {
     let mut command = Command::new("mktemp");
     let path = String::from_utf8_lossy(
         &command
             .arg("-d")
             .output()
             .await
-            .context(TokioIOSnafu)?
+            .context(TokioIOSnafu)
+            .wrap()?
             .stdout,
     )
     .trim()
@@ -111,7 +121,7 @@ pub fn specific_flag() -> Flag {
     )
 }
 
-pub fn choice(message: &str, default_yes: bool) -> Result<bool, WrappedError> {
+pub fn choice(message: &str, default_yes: bool) -> Result<bool, StatefulError> {
     print!(
         "{} [{}]: ",
         message,
@@ -119,7 +129,10 @@ pub fn choice(message: &str, default_yes: bool) -> Result<bool, WrappedError> {
     );
     let _ = std::io::stdout().flush();
     let mut input = String::new();
-    std::io::stdin().read_line(&mut input).context(StdIOSnafu)?;
+    std::io::stdin()
+        .read_line(&mut input)
+        .context(StdIOSnafu)
+        .wrap()?;
     if default_yes {
         if ["no", "n", "false", "f"].contains(&input.to_lowercase().trim()) {
             Ok(false)
@@ -144,12 +157,16 @@ pub async fn command(name: &str, args: &[&str], pwd: Option<&str>) -> Option<i32
     command.status().await.map(|x| x.code()).ok().flatten()
 }
 
-pub async fn get_pool() -> Result<SqlitePool, WrappedError> {
+pub async fn get_pool() -> Result<SqlitePool, StatefulError> {
     let path = PathBuf::from(format!("{LOC_DIR}/data.db"));
     let options = SqliteConnectOptions::from_str(&path.to_string_lossy())
-        .context(SQLSnafu)?
+        .context(SQLSnafu)
+        .wrap()?
         .create_if_missing(true);
-    let db = SqlitePool::connect_with(options).await.context(SQLSnafu)?;
+    let db = SqlitePool::connect_with(options)
+        .await
+        .context(SQLSnafu)
+        .wrap()?;
     // if path.exists() {
     //     Ok(db)
     // } else {
@@ -164,7 +181,8 @@ pub async fn get_pool() -> Result<SqlitePool, WrappedError> {
     )
     .execute(&db)
     .await
-    .context(SQLSnafu)?;
+    .context(SQLSnafu)
+    .wrap()?;
     query(
         r"CREATE TABLE IF NOT EXISTS updates (name TEXT, kind TEXT,
         description TEXT, version TEXT, origin BLOB, dependent INTEGER,
@@ -172,7 +190,8 @@ pub async fn get_pool() -> Result<SqlitePool, WrappedError> {
     )
     .execute(&db)
     .await
-    .context(SQLSnafu)?;
+    .context(SQLSnafu)
+    .wrap()?;
     Ok(db)
     // }
 }
@@ -181,16 +200,21 @@ pub async fn get_apt_pool(
     source: &str,
     code: &str,
     kind: &str,
-) -> Result<SqlitePool, WrappedError> {
+) -> Result<SqlitePool, StatefulError> {
     let path = PathBuf::from(format!("{LOC_DIR}/apt.db"));
     let options = SqliteConnectOptions::from_str(&path.to_string_lossy())
-        .context(SQLSnafu)?
+        .context(SQLSnafu)
+        .wrap()?
         .create_if_missing(true);
-    let db = SqlitePool::connect_with(options).await.context(SQLSnafu)?;
+    let db = SqlitePool::connect_with(options)
+        .await
+        .context(SQLSnafu)
+        .wrap()?;
     query(r"CREATE TABLE IF NOT EXISTS ? ()")
         .execute(&db)
         .await
-        .context(SQLSnafu)?;
+        .context(SQLSnafu)
+        .wrap()?;
     Ok(db)
 }
 
@@ -211,19 +235,19 @@ pub fn which(name: &str) -> bool {
 //     fn nest<E2: From<WrappedError>>(self, loc: &'static str) -> Result<T, E2>;
 // }
 
-// impl<T> FuckWrap<T, WrappedError> for Result<T, WrappedError> {
+// impl<T> FuckWrap<T, StatefulError> for Result<T, StatefulError> {
 //     fn wrap<E2: From<WrappedError>>(self) -> Result<T, E2> {
 //         Ok(self.context(WrappedSnafu)?)
 //     }
 // }
 
-// impl<T> FuckNest<T, WrappedError> for Result<T, WrappedError> {
+// impl<T> FuckNest<T, StatefulError> for Result<T, StatefulError> {
 //     fn nest<E2: From<WrappedError>>(self, loc: &'static str) -> Result<T, E2> {
 //         Ok(self.context(NestedSnafu { loc })?)
 //     }
 // }
 
-// impl<T> FuckNest<T, WrappedError> for Result<T, WrappedError> {
+// impl<T> FuckNest<T, StatefulError> for Result<T, StatefulError> {
 //     fn nest<E2: From<WrappedError>>(self, loc: &'static str) -> Result<T, E2> {
 //         match self {
 //             Ok(t) => Ok(t),
