@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, location};
+use serde_json::json;
+use snafu::{OptionExt, ResultExt};
 use sqlx::{Decode, Encode, Sqlite, Type};
 use std::{fmt::Display, io::Write, path::PathBuf, thread::sleep};
 use tokio::{
@@ -8,14 +9,10 @@ use tokio::{
     time::Duration,
 };
 
-use crate::{
-    errors::StdIOSnafu,
-    utils::{PostAction, get_dir, is_root},
+use crate::errors::{
+    JSONSnafu, OtherSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped, WrappedWith,
 };
-use crate::{
-    errors::{JSONSnafu, OtherSnafu, TokioIOSnafu, Wrapped, WrappedError},
-    utils::which,
-};
+use crate::utils::{PostAction, get_dir, is_root, which};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct SettingsJson {
@@ -28,7 +25,7 @@ pub struct SettingsJson {
 }
 
 impl SettingsJson {
-    pub fn new() -> Result<Self, WrappedError> {
+    pub fn new() -> Result<Self, StatefulError> {
         let shell = if which("fish") {
             ShellType::Fish
         } else if which("bash") {
@@ -40,10 +37,9 @@ impl SettingsJson {
         } else if which("sh") {
             ShellType::Sh
         } else {
-            return Err(WrappedError::Other {
-                error: "No compatible shell interpreters installed!".into(),
-                loc: location!(),
-            });
+            return Err(StatefulError::new(
+                "No compatible shell interpreters installed!",
+            ));
         };
         let mut command = std::process::Command::new("uname");
         let arch = if let Ok(output) = command.arg("-m").output() {
@@ -55,7 +51,7 @@ impl SettingsJson {
                 "x86_64" => {
                     let mut command = std::process::Command::new("cat");
                     command.arg("/proc/cpuinfo");
-                    let output = command.output().context(StdIOSnafu)?;
+                    let output = command.output().context(StdIOSnafu).wrap()?;
                     let splits = String::from_utf8_lossy(&output.stdout);
                     let splits = splits.split_whitespace().collect::<Vec<&str>>();
                     if ["avx512f", "avx512bw", "avx512cd", "avx512dq", "avx512vl"]
@@ -96,26 +92,38 @@ impl SettingsJson {
             sources: Vec::new(),
         })
     }
-    pub async fn set_settings(&self) -> Result<(), WrappedError> {
-        let mut file = File::create(affirm_path().await.wrap(location!())?)
-            .await
-            .context(TokioIOSnafu)?;
-        let settings = serde_json::to_string(self).context(JSONSnafu)?;
+    pub async fn set_settings(self) -> Result<(), StatefulError> {
+        let mut file = File::create(
+            affirm_path()
+                .await
+                .wrap(&json!({"action": "writing settings to disk"}))?,
+        )
+        .await
+        .context(TokioIOSnafu)
+        .wrap()?;
+        let settings = serde_json::to_string(&self).context(JSONSnafu).wrap()?;
         file.write_all(settings.as_bytes())
             .await
             .context(TokioIOSnafu)
+            .wrap()
     }
-    pub async fn get_settings() -> Result<Self, WrappedError> {
-        let mut file = File::open(affirm_path().await.wrap(location!())?)
-            .await
-            .context(TokioIOSnafu)?;
+    pub async fn get_settings() -> Result<Self, StatefulError> {
+        let mut file = File::open(
+            affirm_path()
+                .await
+                .wrap(&json!({"action": "reading settings from disk"}))?,
+        )
+        .await
+        .context(TokioIOSnafu)
+        .wrap()?;
         let mut sources = String::new();
         file.read_to_string(&mut sources)
             .await
-            .context(TokioIOSnafu)?;
-        serde_json::from_str(&sources).context(JSONSnafu)
+            .context(TokioIOSnafu)
+            .wrap()?;
+        serde_json::from_str(&sources).context(JSONSnafu).wrap()
     }
-    // async fn shell(&mut self) -> Result<String, WrappedError> {
+    // async fn shell(&mut self) -> Result<String, StatefulError> {
     //     match self.shell {
     //         ShellType::Fish => Ok(String::from("fish")),
     //         ShellType::Bash => Ok(String::from("bash")),
@@ -143,12 +151,11 @@ pub enum OriginKind {
 }
 
 impl OriginKind {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
         let mut chars = input.chars();
-        let kind = chars.next().ok_or(WrappedError::Other {
-            error: "Missing type identifier!".into(),
-            loc: location!(),
-        })?;
+        let kind = chars
+            .next()
+            .ok_or(StatefulError::new("Missing type identifier!"))?;
         let data = chars.collect::<String>();
         match kind as u8 {
             0 => {
@@ -159,7 +166,8 @@ impl OriginKind {
                     .zip(splits.next())
                     .context(OtherSnafu {
                         error: "Missing required APT fields!",
-                    })?;
+                    })
+                    .wrap()?;
                 let kind = match kind {
                     "main" => AptKind::Main,
                     "multiverse" => AptKind::Multiverse,
@@ -175,18 +183,20 @@ impl OriginKind {
             }
             1 => Ok(Self::Plz(data.to_string())),
             2 => {
-                let (user, repo) = data.split_once(' ').context(OtherSnafu {
-                    error: "Missing GH field `repo`!",
-                })?;
+                let (user, repo) = data
+                    .split_once(' ')
+                    .context(OtherSnafu {
+                        error: "Missing GH field `repo`!",
+                    })
+                    .wrap()?;
                 Ok(Self::Github {
                     user: user.to_string(),
                     repo: repo.to_string(),
                 })
             }
-            kind => Err(WrappedError::Other {
-                error: format!("Invalid kind identifier `{kind}`!").into(),
-                loc: location!(),
-            }),
+            kind => Err(StatefulError::new(format!(
+                "Invalid kind identifier `{kind}`!"
+            ))),
         }
     }
 }
@@ -232,7 +242,14 @@ impl<'a> Decode<'a, Sqlite> for OriginKind {
         value: <Sqlite as sqlx::Database>::ValueRef<'a>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let data: String = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::parse(&data)?)
+        Ok(Self::parse(&data)
+            .wrap(&json!({"action": "decoding APT origins from settings"}))
+            .or_else(|e| {
+                Err(OtherSnafu {
+                    error: e.to_string(),
+                }
+                .build())
+            })?)
     }
 }
 
@@ -271,53 +288,56 @@ pub enum Arch {
 }
 
 impl Arch {
-    pub async fn is_compatible(&self, name: &str) -> Result<bool, WrappedError> {
-        let installed = SettingsJson::get_settings().await.wrap(location!())?.arch;
+    pub async fn is_compatible(&self, name: &str) -> Result<bool, StatefulError> {
+        let installed = SettingsJson::get_settings()
+            .await
+            .wrap(&json!({"action": "asserting CPU architecture compatibility"}))?
+            .arch;
         match self {
             Self::Any => Ok(true),
             Self::X86_64 => Ok(
                 [Self::X86_64, Self::X86_64v2, Self::X86_64v3, Self::X86_64v4].contains(&installed),
             ),
-            Self::NoArch => Err(WrappedError::Other {
-                error: format!("Unrecognized architecture in package {name}!").into(),
-                loc: location!(),
-            }),
+            Self::NoArch => Err(StatefulError::new(format!(
+                "Unrecognized architecture in package {name}!"
+            ))),
             other => Ok(installed == *other),
         }
     }
 }
 
-async fn affirm_path() -> Result<PathBuf, WrappedError> {
-    let mut path = get_dir().await.wrap(location!())?;
+async fn affirm_path() -> Result<PathBuf, StatefulError> {
+    let mut path = get_dir().await.wrap()?;
     path.push("settings.json");
     if !path.exists() {
-        let mut file = File::create(&path).await.context(TokioIOSnafu)?;
-        let new_settings =
-            serde_json::to_string(&SettingsJson::new().wrap(location!())?).context(JSONSnafu)?;
+        let mut file = File::create(&path).await.context(TokioIOSnafu).wrap()?;
+        let new_settings = serde_json::to_string(
+            &SettingsJson::new().wrap(&json!({"action": "affirming settings file exists"}))?,
+        )
+        .context(JSONSnafu)
+        .wrap()?;
 
         file.write_all(new_settings.as_bytes())
             .await
-            .context(TokioIOSnafu)?;
+            .context(TokioIOSnafu)
+            .wrap()?;
         Ok(path)
     } else if path.is_file() {
         Ok(path)
     } else {
-        Err(WrappedError::Other {
-            error: format!(
-                "Path {} is not of the expected type. Is it a real file?",
-                path.display()
-            )
-            .into(),
-            loc: location!(),
-        })
+        Err(StatefulError::new(format!(
+            "Path {} is not of the expected type. Is it a real file?",
+            path.display()
+        )))
     }
 }
 
-pub async fn acquire_lock() -> Result<Option<PostAction>, WrappedError> {
+pub async fn acquire_lock() -> Result<Option<PostAction>, StatefulError> {
+    let cause = json!({"action": "locking the settings file to our process"});
     if !is_root() {
         return Ok(Some(PostAction::Elevate));
     }
-    let mut settings = SettingsJson::get_settings().await.wrap(location!())?;
+    let mut settings = SettingsJson::get_settings().await.wrap(&cause)?;
     loop {
         if settings.locked {
             for i in 0..20 {
@@ -361,20 +381,21 @@ pub async fn acquire_lock() -> Result<Option<PostAction>, WrappedError> {
                 sleep(Duration::from_millis(50));
             }
             println!("\x1B[2K\r\x1B[92mAwaiting program lock. Retrying now\x1B[0m...");
-            settings = SettingsJson::get_settings().await.wrap(location!())?;
+            settings = SettingsJson::get_settings().await.wrap(&cause)?;
         } else {
             break;
         }
     }
     settings.locked = true;
-    settings.set_settings().await.wrap(location!())?;
+    settings.set_settings().await.wrap(&cause)?;
     Ok(None)
 }
 
-pub async fn remove_lock() -> Result<(), WrappedError> {
-    let mut settings = SettingsJson::get_settings().await.wrap(location!())?;
+pub async fn remove_lock() -> Result<(), StatefulError> {
+    let cause = json!({"action": "unlocking the settings file from our process"});
+    let mut settings = SettingsJson::get_settings().await.wrap(&cause)?;
     settings.locked = false;
-    settings.set_settings().await.wrap(location!())
+    settings.set_settings().await.wrap(&cause)
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
