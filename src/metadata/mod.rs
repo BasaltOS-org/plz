@@ -22,7 +22,7 @@ pub mod versioning;
 async fn get_installed_metadata(
     name: &str,
     pool: &SqlitePool,
-) -> Result<Option<InstalledMetaData>, WrappedError> {
+) -> Result<Option<InstalledMetaData>, StatefulError> {
     query_as::<Sqlite, InstalledMetaData>("SELECT * FROM installed WHERE name = ?")
         .bind(name)
         .fetch_optional(pool)
@@ -59,7 +59,7 @@ impl QueuedChanges {
     pub fn has_deps(&self) -> bool {
         !self.secondary.is_empty()
     }
-    pub async fn dependents(&mut self, pool: &SqlitePool) -> Result<(), WrappedError> {
+    pub async fn dependents(&mut self, pool: &SqlitePool) -> Result<(), StatefulError> {
         let mut items = self.primary.iter().cloned().collect::<Vec<Specific>>();
         items.extend_from_slice(&self.secondary.iter().cloned().collect::<Vec<Specific>>());
         for item in items {
@@ -93,7 +93,7 @@ impl InstallPackage {
         }
         data
     }
-    pub async fn install(self) -> Result<(), WrappedError> {
+    pub async fn install(self) -> Result<(), StatefulError> {
         let pool = get_pool().await.wrap(location!())?;
         let self_name = self.metadata.name.to_string();
         let mut collected: Vec<ProcessedMetaData> = self.collect().wrap(location!())?;
@@ -169,7 +169,7 @@ impl InstallPackage {
         }
         Ok(())
     }
-    pub fn collect(self) -> Result<Vec<ProcessedMetaData>, WrappedError> {
+    pub fn collect(self) -> Result<Vec<ProcessedMetaData>, StatefulError> {
         let mut result = Vec::new();
         for dep in self.build_deps {
             let data = dep.collect().wrap(location!())?;
@@ -186,7 +186,7 @@ impl InstallPackage {
 
 pub async fn get_packages(
     args: &[(&String, Option<&String>)],
-) -> Result<Vec<InstallPackage>, WrappedError> {
+) -> Result<Vec<InstallPackage>, StatefulError> {
     let pool = get_pool().await.wrap(location!())?;
     print!("\x1B[2K\rBuilding dependency tree... 0%");
     let settings = SettingsJson::get_settings().await.wrap(location!())?;
@@ -212,7 +212,7 @@ async fn get_package(
     dependent: bool,
     prior: &mut HashSet<Specific>,
     pool: &SqlitePool,
-) -> Result<Option<InstallPackage>, WrappedError> {
+) -> Result<Option<InstallPackage>, StatefulError> {
     let (app, version) = dep;
     let metadata =
         ProcessedMetaData::get_metadata(app, version.map(|x| x.as_str()), sources, dependent, pool)
@@ -234,7 +234,7 @@ async fn get_package(
 /* #region Remove/Purge */
 pub async fn get_local_pkgs(
     args: &[(&String, Option<&String>)],
-) -> Result<Option<QueuedChanges>, WrappedError> {
+) -> Result<Option<QueuedChanges>, StatefulError> {
     let pool = get_pool().await.wrap(location!())?;
     print!("\x1B[2K\rCollecting packages... 0%");
     let mut seen = HashSet::new();
@@ -261,7 +261,7 @@ async fn get_local_pkg(
     prior: &mut HashSet<String>,
     root: bool,
     pool: &SqlitePool,
-) -> Result<Option<QueuedChanges>, WrappedError> {
+) -> Result<Option<QueuedChanges>, StatefulError> {
     let (dep, ver) = *dep;
     let data = match InstalledMetaData::open(dep, pool)
         .await
@@ -325,7 +325,7 @@ async fn get_local_pkg(
 
 /* #endregion Remove/Purge */
 /* #region Update */
-pub async fn collect_updates() -> Result<(), WrappedError> {
+pub async fn collect_updates() -> Result<(), StatefulError> {
     let pool = get_pool().await.wrap(location!())?;
     let _settings = SettingsJson::get_settings().await.wrap(location!())?;
     print!("\x1B[2K\rReading package lists... 0%");
@@ -384,7 +384,7 @@ pub async fn collect_updates() -> Result<(), WrappedError> {
 // async fn collect_update(
 //     path: PathBuf,
 //     sources: &[OriginKind],
-// ) -> Result<Vec<ProcessedMetaData>, WrappedError> {
+// ) -> Result<Vec<ProcessedMetaData>, StatefulError> {
 //     let mut result = Vec::new();
 //     if path.extension().is_none_or(|x| x != "json") {
 //         return Ok(Vec::new());
@@ -410,7 +410,7 @@ pub async fn collect_updates() -> Result<(), WrappedError> {
 // }
 /* #endregion Update */
 /* #region Upgrade */
-pub fn upgrade_all() -> Result<Vec<ProcessedMetaData>, WrappedError> {
+pub fn upgrade_all() -> Result<Vec<ProcessedMetaData>, StatefulError> {
     // let path = get_update_dir().wrap(location!())?;
     // let dir = fs::read_dir(&path)
     //     .context(IOSnafu {
@@ -434,7 +434,7 @@ pub fn upgrade_all() -> Result<Vec<ProcessedMetaData>, WrappedError> {
 
 pub fn upgrade_only(
     pkgs: &[(&String, Option<&String>)],
-) -> Result<Vec<ProcessedMetaData>, WrappedError> {
+) -> Result<Vec<ProcessedMetaData>, StatefulError> {
     let base = upgrade_all().wrap(location!())?;
     let base = base.iter();
     let mut result = HashSet::new();
@@ -461,7 +461,7 @@ pub fn upgrade_only(
     Ok(result.into_iter().collect())
 }
 
-pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), WrappedError> {
+pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), StatefulError> {
     let pool = get_pool().await.wrap(location!())?;
     let settings = SettingsJson::get_settings().await.wrap(location!())?;
     for package in packages {
@@ -478,7 +478,7 @@ pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), Wrap
 
 /* #endregion Upgrade */
 /* #region Unbind */
-pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), WrappedError> {
+pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), StatefulError> {
     let pool = get_pool().await.wrap(location!())?;
     for bit in data {
         let (dep, ver) = *bit;

@@ -25,14 +25,14 @@ pub struct InstalledMetaData {
 }
 
 impl InstalledMetaData {
-    pub async fn open(name: &str, pool: &SqlitePool) -> Result<Option<Self>, WrappedError> {
+    pub async fn open(name: &str, pool: &SqlitePool) -> Result<Option<Self>, StatefulError> {
         query_as::<Sqlite, Self>("SELECT * FROM installed WHERE name = ?")
             .bind(name)
             .fetch_optional(pool)
             .await
             .context(SQLSnafu)
     }
-    pub async fn write(self, pool: &SqlitePool) -> Result<Option<Self>, WrappedError> {
+    pub async fn write(self, pool: &SqlitePool) -> Result<Option<Self>, StatefulError> {
         query::<Sqlite>("INSERT INTO installed VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(&self.name)
             .bind(&self.kind)
@@ -53,7 +53,7 @@ impl InstalledMetaData {
         &self,
         specific: &Specific,
         pool: &SqlitePool,
-    ) -> Result<(), WrappedError> {
+    ) -> Result<(), StatefulError> {
         let mut data = self.clone();
         // let index = &data
         //     .dependencies
@@ -101,7 +101,7 @@ pub enum InstalledInstallKind {
 }
 
 impl InstalledInstallKind {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
         let mut chars = input.chars();
         let kind = chars.next().context(OtherSnafu {
             error: "Missing type identifier!",
@@ -169,7 +169,7 @@ pub struct InstalledCompilable {
 }
 
 impl InstalledCompilable {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
         let (uninstall, purge) = input.split_once('\x00').context(OtherSnafu {
             error: "Missing InstalledCompilable field `purge`!",
         })?;
