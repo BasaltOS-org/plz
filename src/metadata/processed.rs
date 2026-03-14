@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use snafu::{OptionExt, ResultExt, location};
 use sqlx::{Decode, Encode, FromRow, Sqlite, SqlitePool, Type, query, query_as};
 use std::{
@@ -8,6 +9,9 @@ use std::{
 };
 use tokio::{fs::File, io::AsyncWriteExt, process::Command as RunCommand};
 
+use crate::errors::{
+    NetSnafu, OtherSnafu, SQLSnafu, StatefulError, TokioIOSnafu, Wrapped, WrappedWith,
+};
 use crate::metadata::{
     DepVer, DependKind, InstallPackage, InstalledMetaData, MetaDataKind, Specific,
     depend_kind::DependKindVec,
@@ -16,12 +20,9 @@ use crate::metadata::{
     parsers::{apt::RawApt, plz::RawPlz},
     versioning::{self, SpecificVec},
 };
-use crate::settings::{Arch, OriginKind};
 use crate::utils::{tmpfile, version::Version};
-use crate::{
-    errors::{NetSnafu, OtherSnafu, SQLSnafu, TokioIOSnafu, Wrapped, WrappedError},
-    settings::SettingsJson,
-};
+
+use crate::settings::{Arch, OriginKind, SettingsJson};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum ProcessedInstallKind {
@@ -30,21 +31,24 @@ pub enum ProcessedInstallKind {
 }
 
 impl ProcessedInstallKind {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing package data"});
         let mut chars = input.chars();
-        let kind = chars.next().context(OtherSnafu {
-            error: "Missing type identifier!",
-        })?;
+        let kind = chars
+            .next()
+            .context(OtherSnafu {
+                error: "Missing type identifier!",
+            })
+            .wrap()?;
         let data = chars.collect::<String>();
         match kind as u8 {
-            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap(location!())?)),
+            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap(&cause)?)),
             1 => Ok(Self::Compilable(
-                ProcessedCompilable::parse(&data).wrap(location!())?,
+                ProcessedCompilable::parse(&data).wrap(&cause)?,
             )),
-            kind => Err(WrappedError::Other {
-                error: format!("Invalid kind identifier `{kind}`!").into(),
-                loc: location!(),
-            }),
+            kind => Err(StatefulError::new(format!(
+                "Invalid kind identifier `{kind}`!"
+            ))),
         }
     }
 }
@@ -87,7 +91,14 @@ impl<'a> Decode<'a, Sqlite> for ProcessedInstallKind {
         value: <Sqlite as sqlx::Database>::ValueRef<'a>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let data: String = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::parse(&data)?)
+        Ok(Self::parse(&data)
+            .wrap(&json!({"action": "decoding cached package type"}))
+            .or_else(|e| {
+                Err(OtherSnafu {
+                    error: e.to_string(),
+                }
+                .build())
+            })?)
     }
 }
 
@@ -98,10 +109,13 @@ pub struct PreBuilt {
 }
 
 impl PreBuilt {
-    pub fn parse(input: &str) -> Result<Self, WrappedError> {
-        let (critical, configs) = input.split_once("\x00\x00").context(OtherSnafu {
-            error: "Missing PreBuilt field 'configs`!",
-        })?;
+    pub fn parse(input: &str) -> Result<Self, StatefulError> {
+        let (critical, configs) = input
+            .split_once("\x00\x00")
+            .context(OtherSnafu {
+                error: "Missing PreBuilt field 'configs`!",
+            })
+            .wrap()?;
         let critical = critical
             .split('\x00')
             .map(|x| x.to_string())
@@ -143,20 +157,32 @@ pub struct ProcessedCompilable {
 }
 
 impl ProcessedCompilable {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
         let mut splits = input.split('\x00');
-        let build = splits.next().context(OtherSnafu {
-            error: "Missing ProcessedCompilable field `build`!",
-        })?;
-        let install = splits.next().context(OtherSnafu {
-            error: "Missing ProcessedCompilable field `install`!",
-        })?;
-        let uninstall = splits.next().context(OtherSnafu {
-            error: "Missing ProcessedCompilable field `uninstall`!",
-        })?;
-        let purge = splits.next().context(OtherSnafu {
-            error: "Missing ProcessedCompilable field `purge`!",
-        })?;
+        let build = splits
+            .next()
+            .context(OtherSnafu {
+                error: "Missing ProcessedCompilable field `build`!",
+            })
+            .wrap()?;
+        let install = splits
+            .next()
+            .context(OtherSnafu {
+                error: "Missing ProcessedCompilable field `install`!",
+            })
+            .wrap()?;
+        let uninstall = splits
+            .next()
+            .context(OtherSnafu {
+                error: "Missing ProcessedCompilable field `uninstall`!",
+            })
+            .wrap()?;
+        let purge = splits
+            .next()
+            .context(OtherSnafu {
+                error: "Missing ProcessedCompilable field `purge`!",
+            })
+            .wrap()?;
         Ok(Self {
             build: build.to_string(),
             install: install.to_string(),
@@ -221,7 +247,8 @@ impl ProcessedMetaData {
             hash: self.hash.to_string(),
         }
     }
-    pub async fn install_package(self, pool: &SqlitePool) -> Result<(), WrappedError> {
+    pub async fn install_package(self, pool: &SqlitePool) -> Result<(), StatefulError> {
+        let cause = json!({"action": "installing package", "package": self.name});
         let name = self.name.to_string();
         println!("Installing `{name}`...");
         let mut metadata = self.to_installed();
@@ -236,41 +263,36 @@ impl ProcessedMetaData {
                 })?;
             *dependent = Specific {
                 name: dependent.name.to_string(),
-                version: Version::parse(&their_metadata.version).wrap(location!())?,
+                version: Version::parse(&their_metadata.version).wrap(&cause)?,
             }
         }
-        let tmpfile = tmpfile().await.wrap(location!())?;
-        let mut file = File::create(&tmpfile.0).await.context(TokioIOSnafu)?;
+        let tmpfile = tmpfile().await.wrap(&cause)?;
+        let mut file = File::create(&tmpfile.0)
+            .await
+            .context(TokioIOSnafu)
+            .wrap()?;
         let endpoint = match self.origin {
             OriginKind::Plz(plz) => format!("{plz}?v={}", self.version),
             OriginKind::Github { .. } => {
-                return Err(WrappedError::Other {
-                    error: "debug breakpoint".into(),
-                    loc: location!(),
-                });
+                return Err(StatefulError::new("debug breakpoint"));
                 // thingy
             }
             OriginKind::Apt { .. } => {
-                return Err(WrappedError::Other {
-                    error: "debug breakpoint".into(),
-                    loc: location!(),
-                });
+                return Err(StatefulError::new("debug breakpoint"));
             }
         };
-        let response = reqwest::get(&endpoint).await.context(NetSnafu)?;
-        let body = response.text().await.context(NetSnafu)?;
+        let response = reqwest::get(&endpoint).await.context(NetSnafu).wrap()?;
+        let body = response.text().await.context(NetSnafu).wrap()?;
         file.write_all(body.as_bytes())
             .await
-            .context(TokioIOSnafu)?;
+            .context(TokioIOSnafu)
+            .wrap()?;
         match self.install_kind {
             ProcessedInstallKind::PreBuilt(_) => {
-                return Err(WrappedError::Other {
-                    error: "debug breakpoint".into(),
-                    loc: location!(),
-                }); //thingy
+                return Err(StatefulError::new("debug breakpoint")); //thingy
             }
             ProcessedInstallKind::Compilable(compilable) => {
-                let shell = SettingsJson::get_settings().await.wrap(location!())?.shell;
+                let shell = SettingsJson::get_settings().await.wrap(&cause)?.shell;
                 let build = compilable.build.replace("{$~}", &tmpfile.1);
                 let mut command = RunCommand::new(shell.to_string());
                 command
@@ -278,7 +300,8 @@ impl ProcessedMetaData {
                     .arg(build)
                     .status()
                     .await
-                    .context(TokioIOSnafu)?;
+                    .context(TokioIOSnafu)
+                    .wrap()?;
                 let install = compilable.install.replace("{$~}", &tmpfile.1);
                 let mut command = RunCommand::new(shell.to_string());
                 command
@@ -286,19 +309,18 @@ impl ProcessedMetaData {
                     .arg(install)
                     .status()
                     .await
-                    .context(TokioIOSnafu)?;
+                    .context(TokioIOSnafu)
+                    .wrap()?;
             }
         }
         metadata.write(pool).await.wrap(location!())?;
         for dep in deps.0 {
-            let dep = dep.get_installed_specific(pool).await.wrap(location!())?;
-            dep.write_dependent(&name, &ver, pool)
-                .await
-                .wrap(location!())?;
+            let dep = dep.get_installed_specific(pool).await.wrap(&cause)?;
+            dep.write_dependent(&name, &ver, pool).await.wrap(&cause)?;
         }
         Ok(())
     }
-    pub async fn write(self, pool: &SqlitePool) -> Result<Self, WrappedError> {
+    pub async fn write(self, pool: &SqlitePool) -> Result<Self, StatefulError> {
         // let path = loop {
         //     // let mut path = base.to_path_buf();
         //     path.push(format!("{inc}.json"));
@@ -330,7 +352,8 @@ impl ProcessedMetaData {
             .bind(&self.hash)
             .execute(pool)
             .await
-            .context(SQLSnafu)?;
+            .context(SQLSnafu)
+            .wrap()?;
         // let data = serde_json::to_string(&self)
         //     .context(JSONSnafu {
         //         loc: self.name.to_string(),
@@ -344,7 +367,7 @@ impl ProcessedMetaData {
         //     .wrap(location!())?;
         Ok(self)
     }
-    pub async fn open(name: &str, pool: &SqlitePool) -> Result<Self, WrappedError> {
+    pub async fn open(name: &str, pool: &SqlitePool) -> Result<Self, StatefulError> {
         // let mut path = get_update_dir().wrap(location!())?;
         // path.push(format!("{}.json", name));
         // let mut file = File::open(&path)
@@ -370,7 +393,7 @@ impl ProcessedMetaData {
             .fetch_one(pool)
             .await
             .context(SQLSnafu)
-            .wrap(location!())
+            .wrap()
     }
     pub async fn get_metadata(
         name: &str,
@@ -378,11 +401,8 @@ impl ProcessedMetaData {
         sources: &[OriginKind],
         dependent: bool,
         pool: &SqlitePool,
-    ) -> Result<Self, WrappedError> {
-        let mut metadata = Err(WrappedError::Other {
-            error: "No metadata!".into(),
-            loc: location!(),
-        });
+    ) -> Result<Self, StatefulError> {
+        let mut metadata = Err(StatefulError::new("No metadata!"));
         for source in sources {
             match source {
                 OriginKind::Plz(source) => {
@@ -394,10 +414,12 @@ impl ProcessedMetaData {
                     };
                     let body = reqwest::get(endpoint)
                         .await
-                        .context(NetSnafu)?
+                        .context(NetSnafu)
+                        .wrap()?
                         .text()
                         .await
-                        .context(NetSnafu)?;
+                        .context(NetSnafu)
+                        .wrap()?;
                     if let Ok(rawplz) = serde_json::from_str::<RawPlz>(&body) {
                         metadata = rawplz.to_process(dependent);
                         break;
@@ -427,14 +449,14 @@ impl ProcessedMetaData {
                     };
                     metadata = RawApt::parse(source, code, kind, name, &ver.0, dependent, pool)
                         .await
-                        .wrap(location!());
+                        .wrap();
                     break;
                 }
             }
         }
         metadata
     }
-    pub async fn remove_update_cache(&self, pool: &SqlitePool) -> Result<(), WrappedError> {
+    pub async fn remove_update_cache(&self, pool: &SqlitePool) -> Result<(), StatefulError> {
         // let path = get_update_dir().wrap(location!())?;
         // let dir = fs::read_dir(&path)
         //     .context(IOSnafu {
@@ -461,7 +483,8 @@ impl ProcessedMetaData {
             .bind(&self.name)
             .execute(pool)
             .await
-            .context(SQLSnafu)?;
+            .context(SQLSnafu)
+            .wrap()?;
         // println!(
         //     "\x1B[33m[WARN] cache for {} already cleared!\x1B[0m",
         //     self.name
@@ -469,33 +492,35 @@ impl ProcessedMetaData {
         Ok(())
     }
     pub async fn get_depends(
-        metadata: &Self,
+        &self,
         sources: &[OriginKind],
         prior: &mut HashSet<Specific>,
         pool: &SqlitePool,
-    ) -> Result<InstallPackage, WrappedError> {
+    ) -> Result<InstallPackage, StatefulError> {
+        let cause = json!({"action": "reading dependencies for package", "package": self.name});
         let mut package = InstallPackage {
-            metadata: metadata.clone(),
+            metadata: self.clone(),
             build_deps: Vec::new(),
             run_deps: Vec::new(),
         };
         package.build_deps =
-            DependKind::batch_as_installed(&metadata.build_dependencies, sources, prior, pool)
+            DependKind::batch_as_installed(&self.build_dependencies, sources, prior, pool)
                 .await
-                .wrap(location!())?;
+                .wrap(&cause)?;
         package.run_deps =
-            DependKind::batch_as_installed(&metadata.runtime_dependencies, sources, prior, pool)
+            DependKind::batch_as_installed(&self.runtime_dependencies, sources, prior, pool)
                 .await
-                .wrap(location!())?;
+                .wrap(&cause)?;
         Ok(package)
     }
     pub async fn upgrade_package(
         &self,
         sources: &[OriginKind],
         pool: &SqlitePool,
-    ) -> Result<(), WrappedError> {
-        let version = Version::parse(&self.version).wrap(location!())?;
-        let specific = self.as_specific().wrap(location!())?;
+    ) -> Result<(), StatefulError> {
+        let cause = json!({"action": "upgrading package", "package": self.name});
+        let version = Version::parse(&self.version).wrap(&cause)?;
+        let specific = self.as_specific().wrap(&cause)?;
         let Ok(Some(installed)) = InstalledMetaData::open(&self.name, pool).await else {
             println!(
                 "\x1B[33m[WARN] Skipping `{}`\x1B[0m (This is likely the result of a stale cache)...",
@@ -541,21 +566,21 @@ impl ProcessedMetaData {
         let children = {
             let mut s_children = Vec::new();
             for child in children {
-                s_children.push(child.await.wrap(location!())?);
+                s_children.push(child.await.wrap(&cause)?);
             }
             s_children
         };
         for child in children.into_iter() {
-            child.install_package(pool).await.wrap(location!())?;
+            child.install_package(pool).await.wrap(&cause)?;
         }
         for stale in stale_installed {
             stale
                 .get_installed_specific(pool)
                 .await
-                .wrap(location!())?
+                .wrap(&cause)?
                 .remove(false, Some(pool))
                 .await
-                .wrap(location!())?;
+                .wrap(&cause)?;
         }
         for dep in new_deps {
             if let Some(dep_ver) = dep.as_dep_ver() {
@@ -568,8 +593,8 @@ impl ProcessedMetaData {
                 let metadata = dep_ver
                     .pull_metadata(Some(sources), installed_metadata.dependent, pool)
                     .await
-                    .wrap(location!())?;
-                metadata.install_package(pool).await.wrap(location!())?;
+                    .wrap(&cause)?;
+                metadata.install_package(pool).await.wrap(&cause)?;
             }
         }
         for package in in_place_upgrade {
@@ -586,9 +611,9 @@ impl ProcessedMetaData {
                 let metadata = dep_ver
                     .pull_metadata(Some(sources), old_metadata.dependent, pool)
                     .await
-                    .wrap(location!())?;
+                    .wrap(&cause)?;
                 if metadata.version != old_metadata.version {
-                    metadata.install_package(pool).await.wrap(location!())?;
+                    metadata.install_package(pool).await.wrap(&cause)?;
                 }
                 let mut metadata = InstalledMetaData::open(&name, pool)
                     .await
@@ -609,13 +634,15 @@ impl ProcessedMetaData {
                 metadata.write(pool).await.wrap(location!())?;
             }
         }
-        self.clone().install_package(pool).await.wrap(location!())?;
+        self.clone().install_package(pool).await.wrap(&cause)?;
         Ok(())
     }
-    pub fn as_specific(&self) -> Result<Specific, WrappedError> {
+    pub fn as_specific(&self) -> Result<Specific, StatefulError> {
         Ok(Specific {
             name: self.name.to_string(),
-            version: Version::parse(&self.version).wrap(location!())?,
+            version: Version::parse(&self.version).wrap(
+                &json!({"action": "parsing as `specific` package type`", "package": self.name}),
+            )?,
         })
     }
 }

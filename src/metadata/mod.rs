@@ -224,7 +224,8 @@ async fn get_package(
         return Ok(None);
     };
     Ok(Some(
-        ProcessedMetaData::get_depends(&metadata, sources, prior, pool)
+        metadata
+            .get_depends(sources, prior, pool)
             .await
             .wrap(location!())?,
     ))

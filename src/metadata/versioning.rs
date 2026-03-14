@@ -46,14 +46,10 @@ impl DepVer {
         dependent: bool,
         pool: &SqlitePool,
     ) -> Result<ProcessedMetaData, StatefulError> {
+        let cause = json!({"action": "pulling package metadata", "package": self.name});
         let sources = match sources {
             Some(sources) => sources,
-            None => {
-                &SettingsJson::get_settings()
-                    .await
-                    .wrap(&json!({"action": "pulling package metadata", "package": self.name}))?
-                    .sources
-            }
+            None => &SettingsJson::get_settings().await.wrap(&cause)?.sources,
         };
         let mut versions = None;
         let mut g_source = None;
@@ -124,7 +120,7 @@ impl DepVer {
             .wrap()?;
         ProcessedMetaData::get_metadata(&name, Some(&ver), &[source], dependent, pool)
             .await
-            .wrap()
+            .wrap(&cause)
     }
     pub fn parse(input: &str) -> Result<Self, StatefulError> {
         let (name, range) = input

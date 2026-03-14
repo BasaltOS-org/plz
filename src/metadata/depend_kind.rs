@@ -55,7 +55,7 @@ impl DependKind {
         sources: &[OriginKind],
         prior: &mut HashSet<Specific>,
         pool: &SqlitePool,
-    ) -> Result<Vec<InstallPackage>, WrappedError> {
+    ) -> Result<Vec<InstallPackage>, StatefulError> {
         let mut result = Vec::new();
         for dep in deps.0.iter() {
             let dep = match dep {
@@ -96,7 +96,7 @@ impl DependKind {
             };
             if !prior.contains(&specific) {
                 prior.insert(specific);
-                let child = Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior, pool))
+                let child = Box::pin(dep.get_depends(sources, prior, pool))
                     .await
                     .wrap(location!())?;
                 result.push(child);
@@ -189,7 +189,7 @@ impl DependKind {
             Self::Volatile(volatile) => volatile.to_string(),
         }
     }
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
         let mut chars = input.chars();
         let kind = chars.next().context(OtherSnafu {
             error: "Missing type identifier!",
@@ -221,7 +221,7 @@ impl Display for DependKind {
 pub struct DependKindVec(pub Vec<DependKind>);
 
 impl DependKindVec {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
         if input.is_empty() {
             return Ok(Self(Vec::new()));
         }

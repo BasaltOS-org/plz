@@ -25,7 +25,7 @@ pub struct RawPlz {
 }
 
 impl RawPlz {
-    pub fn to_process(self, dependent: bool) -> Result<ProcessedMetaData, WrappedError> {
+    pub fn to_process(self, dependent: bool) -> Result<ProcessedMetaData, StatefulError> {
         let origin = if self.origin.starts_with("gh/") {
             let split = self
                 .origin
@@ -74,7 +74,7 @@ impl RawPlz {
             hash: self.hash,
         })
     }
-    fn parse_ver(ver: &str) -> Result<Range, WrappedError> {
+    fn parse_ver(ver: &str) -> Result<Range, StatefulError> {
         let mut lower = VerReq::NoBound;
         let mut upper = VerReq::NoBound;
         if let Some(ver) = ver.strip_prefix(">>") {
@@ -96,7 +96,7 @@ impl RawPlz {
         // thingy
         Ok(Range { lower, upper })
     }
-    fn as_dep_kind(deps: &[String]) -> Result<Vec<DependKind>, WrappedError> {
+    fn as_dep_kind(deps: &[String]) -> Result<Vec<DependKind>, StatefulError> {
         let mut result = Vec::new();
         for dep in deps {
             let val = if let Some(dep) = dep.strip_prefix('!') {
