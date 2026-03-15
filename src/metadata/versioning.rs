@@ -361,12 +361,8 @@ impl Specific {
             let Ok(dep) = dep.get_installed_specific(pool).await else {
                 continue;
             };
-            data.clear_dependencies(&dep, pool)
-                .await
-                .wrap(location!())?;
-            Box::pin(dep.remove(purge, Some(pool)))
-                .await
-                .wrap(location!())?;
+            data.clear_dependencies(&dep, pool).await.wrap(&cause)?;
+            Box::pin(dep.remove(purge, Some(pool))).await.wrap(&cause)?;
         }
         match data.install_kind {
             InstalledInstallKind::PreBuilt(_) => {

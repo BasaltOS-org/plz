@@ -600,14 +600,12 @@ impl ProcessedMetaData {
         for package in in_place_upgrade {
             if let Some(dep_ver) = package.as_dep_ver() {
                 let name = dep_ver.name.to_string();
-                let metadata = get_installed_metadata(&name, pool)
-                    .await
-                    .wrap(location!())?;
+                let metadata = get_installed_metadata(&name, pool).await.wrap(&cause)?;
                 let old_metadata = metadata
                     .context(OtherSnafu {
                         error: "Cannot find data for package `{name}`!",
                     })
-                    .wrap(location!())?;
+                    .wrap()?;
                 let metadata = dep_ver
                     .pull_metadata(Some(sources), old_metadata.dependent, pool)
                     .await
@@ -617,7 +615,7 @@ impl ProcessedMetaData {
                 }
                 let mut metadata = InstalledMetaData::open(&name, pool)
                     .await
-                    .wrap(location!())?
+                    .wrap(&cause)?
                     .context(OtherSnafu {
                         error: format!("Failed to locate `{}`!", self.name),
                     })?;
@@ -631,7 +629,7 @@ impl ProcessedMetaData {
                 } else {
                     metadata.dependents.0.push(specific.clone());
                 };
-                metadata.write(pool).await.wrap(location!())?;
+                metadata.write(pool).await.wrap(&cause)?;
             }
         }
         self.clone().install_package(pool).await.wrap(&cause)?;
