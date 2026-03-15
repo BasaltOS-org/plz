@@ -46,7 +46,7 @@ impl DepVer {
         dependent: bool,
         pool: &SqlitePool,
     ) -> Result<ProcessedMetaData, StatefulError> {
-        let cause = json!({"action": "pulling package metadata", "package": self.name});
+        let cause = json!({"action": "pulling dependency metadata", "dependency": self.name});
         let sources = match sources {
             Some(sources) => sources,
             None => &SettingsJson::get_settings().await.wrap(&cause)?.sources,
