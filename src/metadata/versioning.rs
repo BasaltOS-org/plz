@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use snafu::{OptionExt, ResultExt, location};
+use snafu::{OptionExt, ResultExt};
 use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type, query, query_as};
 use std::{
     fmt::{self, Display, Formatter},
@@ -302,22 +302,17 @@ impl Specific {
     ) -> Result<(), StatefulError> {
         let data = InstalledMetaData::open(&self.name, pool)
             .await
-            .wrap(location!())?
+            .wrap(&json!({"action": "collecting package dependents", "package": self.name}))?
             .context(OtherSnafu {
                 error: format!("Failed to locate package `{}`!", self.name),
-            })?;
+            })
+            .wrap()?;
         if data.version == self.version.to_string() {
             for dependent in &data.dependents.0 {
                 if queued.insert_primary(dependent.clone()) {
                     Box::pin(dependent.get_dependents(queued, pool))
                         .await
-                        // .context(OtherSnafu {
-                        //     error: format!("Nested loop for package {}", self.name),
-                        // })
-                        .wrap_with(
-                            format!("Nested loop for package `{}`", self.name).into(),
-                            location!(),
-                        )?;
+                        .wrap(&json!({"action": "nested dependent resolution", "package": self.name, "dependent": dependent.name}))?;
                 }
             }
             Ok(())

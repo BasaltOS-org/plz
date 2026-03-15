@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use snafu::{OptionExt, ResultExt, location};
+use snafu::{OptionExt, ResultExt};
 use sqlx::{Decode, Encode, FromRow, Sqlite, SqlitePool, Type, query, query_as};
 use std::{
     collections::HashSet,
@@ -257,10 +257,11 @@ impl ProcessedMetaData {
         for dependent in metadata.dependents.0.iter_mut() {
             let their_metadata = InstalledMetaData::open(&dependent.name, pool)
                 .await
-                .wrap(location!())?
+                .wrap(&cause)?
                 .context(OtherSnafu {
                     error: format!("Failed to locate `{}`!", self.name),
-                })?;
+                })
+                .wrap()?;
             *dependent = Specific {
                 name: dependent.name.to_string(),
                 version: Version::parse(&their_metadata.version).wrap(&cause)?,
@@ -313,7 +314,7 @@ impl ProcessedMetaData {
                     .wrap()?;
             }
         }
-        metadata.write(pool).await.wrap(location!())?;
+        metadata.write(pool).await.wrap(&cause)?;
         for dep in deps.0 {
             let dep = dep.get_installed_specific(pool).await.wrap(&cause)?;
             dep.write_dependent(&name, &ver, pool).await.wrap(&cause)?;
@@ -586,10 +587,11 @@ impl ProcessedMetaData {
             if let Some(dep_ver) = dep.as_dep_ver() {
                 let installed_metadata = InstalledMetaData::open(&dep_ver.name, pool)
                     .await
-                    .wrap(location!())?
+                    .wrap(&json!({"action": "installing package dependencies", "package": self.name, "dependency": dep.name()}))?
                     .context(OtherSnafu {
                         error: format!("Failed to locate `{}`!", self.name),
-                    })?;
+                    })
+                    .wrap()?;
                 let metadata = dep_ver
                     .pull_metadata(Some(sources), installed_metadata.dependent, pool)
                     .await
@@ -618,7 +620,8 @@ impl ProcessedMetaData {
                     .wrap(&cause)?
                     .context(OtherSnafu {
                         error: format!("Failed to locate `{}`!", self.name),
-                    })?;
+                    })
+                    .wrap()?;
                 if let Some(found) = metadata
                     .dependents
                     .0

@@ -1,9 +1,9 @@
 use serde_json::json;
-use snafu::{OptionExt, ResultExt, location};
+use snafu::{OptionExt, ResultExt};
 use sqlx::{Sqlite, SqlitePool, query_as};
 use std::collections::HashSet;
 
-use crate::errors::{OtherSnafu, SQLSnafu, StatefulError, Wrapped, WrappedError, WrappedWith};
+use crate::errors::{OtherSnafu, SQLSnafu, StatefulError, Wrapped, WrappedWith};
 use crate::metadata::{
     depend_kind::DependKind,
     installed::InstalledMetaData,
@@ -275,9 +275,10 @@ async fn get_local_pkg(
     pool: &SqlitePool,
 ) -> Result<Option<QueuedChanges>, StatefulError> {
     let (dep, ver) = *dep;
+    let cause = json!({"action": "retrieving local package", "package": dep});
     let data = match InstalledMetaData::open(dep, pool)
         .await
-        .wrap(location!())?
+        .wrap(&cause)?
         .context(OtherSnafu {
             error: format!("Failed to locate `{dep}`!"),
         }) {
@@ -286,21 +287,24 @@ async fn get_local_pkg(
             if root {
                 return Ok(None);
             } else {
-                fault.wrap(location!())?
+                fault.wrap()?
             }
         }
     };
-    let mut working = Vec::new();
-    if let Some(ver) = ver {
+    let working = if let Some(ver) = ver {
         if data.version == *ver {
-            working.push(data);
+            Some(data)
+        } else {
+            None
         }
     } else if !data.dependent {
-        working.push(data);
-    }
+        Some(data)
+    } else {
+        None
+    };
     let mut result = QueuedChanges::new();
-    for version in working {
-        for dependency in &version.dependencies.0 {
+    if let Some(working) = working {
+        for dependency in &working.dependencies.0 {
             if prior.contains(&dependency.name) {
                 continue;
             } else {
@@ -316,7 +320,7 @@ async fn get_local_pkg(
                 pool,
             ))
             .await
-            .wrap(&json!({"action": "nested dependency resolution", "package": version.name, "dependency": dependency.name}))?
+            .wrap(&json!({"action": "nested dependency resolution", "package": working.name, "dependency": dependency.name}))?
             .unwrap_or_default();
             // let items = items.unwrap_or_default();
             result.extend(items);
@@ -324,10 +328,8 @@ async fn get_local_pkg(
         }
         if root {
             result.insert_primary(Specific {
-                name: version.name.to_string(),
-                version: Version::parse(&version.version).wrap(
-                    &json!({"action": "retrieving local package", "package": version.name}),
-                )?,
+                name: working.name.to_string(),
+                version: Version::parse(&working.version).wrap(&cause)?,
             });
         }
     }
@@ -524,7 +526,7 @@ pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), StatefulE
                 );
             }
         };
-        data.write(&pool).await.wrap(location!())?;
+        data.write(&pool).await.wrap(&cause)?;
     }
     Ok(())
 }

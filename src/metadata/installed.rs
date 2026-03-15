@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, location};
+use serde_json::json;
+use snafu::{OptionExt, ResultExt};
 use sqlx::{Decode, Encode, FromRow, Sqlite, SqlitePool, Type, query, query_as};
 use std::fmt::{self, Display, Formatter};
 
-use crate::errors::{OtherSnafu, SQLSnafu, Wrapped, WrappedError};
+use crate::errors::{OtherSnafu, SQLSnafu, StatefulError, Wrapped, WrappedWith};
 use crate::metadata::{
     MetaDataKind, Specific,
     processed::PreBuilt,
@@ -31,6 +32,7 @@ impl InstalledMetaData {
             .fetch_optional(pool)
             .await
             .context(SQLSnafu)
+            .wrap()
     }
     pub async fn write(self, pool: &SqlitePool) -> Result<Option<Self>, StatefulError> {
         query::<Sqlite>("INSERT INTO installed VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -46,7 +48,7 @@ impl InstalledMetaData {
             .execute(pool)
             .await
             .context(SQLSnafu)
-            .wrap(location!())?;
+            .wrap()?;
         Ok(Some(self))
     }
     pub async fn clear_dependencies(
@@ -81,15 +83,19 @@ impl InstalledMetaData {
                     break;
                 }
             }
-            e_index.context(OtherSnafu {
-                error: format!(
-                    "Dependent `{}` {} not found for package `{}`!",
-                    data.name, data.version, specific.name
-                ),
-            })?
+            e_index
+                .context(OtherSnafu {
+                    error: format!(
+                        "Dependent `{}` {} not found for package `{}`!",
+                        data.name, data.version, specific.name
+                    ),
+                })
+                .wrap()?
         };
         data.dependencies.0.remove(index);
-        data.write(pool).await.wrap(location!())?;
+        data.write(pool)
+            .await
+            .wrap(&json!({"action": "clearing package dependencies", "package": self.name}))?;
         Ok(())
     }
 }
@@ -102,20 +108,23 @@ pub enum InstalledInstallKind {
 
 impl InstalledInstallKind {
     fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing bytes to InstalledInstallKind"});
         let mut chars = input.chars();
-        let kind = chars.next().context(OtherSnafu {
-            error: "Missing type identifier!",
-        })?;
+        let kind = chars
+            .next()
+            .context(OtherSnafu {
+                error: "Missing type identifier!",
+            })
+            .wrap()?;
         let data = chars.collect::<String>();
         match kind as u8 {
-            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap(location!())?)),
+            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap(&cause)?)),
             1 => Ok(Self::Compilable(
-                InstalledCompilable::parse(&data).wrap(location!())?,
+                InstalledCompilable::parse(&data).wrap(&cause)?,
             )),
-            kind => Err(WrappedError::Other {
-                error: format!("Invalid kind identifier `{kind}`!").into(),
-                loc: location!(),
-            }),
+            kind => Err(StatefulError::new(format!(
+                "Invalid kind identifier `{kind}`!"
+            ))),
         }
     }
 }
@@ -149,7 +158,14 @@ impl<'a> Decode<'a, Sqlite> for InstalledInstallKind {
         value: <Sqlite as sqlx::Database>::ValueRef<'a>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let data: String = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::parse(&data)?)
+        Ok(Self::parse(&data)
+            .wrap(&json!({"action": "decoding cached InstalledInstallKind"}))
+            .or_else(|e| {
+                Err(OtherSnafu {
+                    error: e.to_string(),
+                }
+                .build())
+            })?)
     }
 }
 
@@ -170,9 +186,12 @@ pub struct InstalledCompilable {
 
 impl InstalledCompilable {
     fn parse(input: &str) -> Result<Self, StatefulError> {
-        let (uninstall, purge) = input.split_once('\x00').context(OtherSnafu {
-            error: "Missing InstalledCompilable field `purge`!",
-        })?;
+        let (uninstall, purge) = input
+            .split_once('\x00')
+            .context(OtherSnafu {
+                error: "Missing InstalledCompilable field `purge`!",
+            })
+            .wrap()?;
         Ok(Self {
             uninstall: uninstall.to_string(),
             purge: purge.to_string(),
