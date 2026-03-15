@@ -1,17 +1,19 @@
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, location};
+use serde_json::json;
+use snafu::OptionExt;
 use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type};
 use std::{
     collections::HashSet,
     fmt::{self, Display, Formatter},
 };
 
-use crate::errors::{OtherSnafu, Wrapped, WrappedError};
-use crate::metadata::{
-    DepVer, InstallPackage, Specific, get_installed_metadata, processed::ProcessedMetaData,
-};
+use crate::metadata::{DepVer, InstallPackage, Specific, processed::ProcessedMetaData};
 use crate::settings::OriginKind;
 use crate::utils::{range::Range, verreq::VerReq, version::Version, which};
+use crate::{
+    errors::{OtherSnafu, StatefulError, Wrapped},
+    metadata::installed::InstalledMetaData,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum DependKind {
@@ -55,21 +57,22 @@ impl DependKind {
         sources: &[OriginKind],
         prior: &mut HashSet<Specific>,
         pool: &SqlitePool,
-    ) -> Result<Vec<InstallPackage>, WrappedError> {
+    ) -> Result<Vec<InstallPackage>, StatefulError> {
+        let cause = json!({"action": "converting in batch DependKinds to InstalledPackages"});
         let mut result = Vec::new();
         for dep in deps.0.iter() {
             let dep = match dep {
                 Self::Latest(latest) => {
                     ProcessedMetaData::get_metadata(latest, None, sources, true, pool)
                         .await
-                        .wrap(location!())?
+                        .wrap(&cause)?
                 }
                 Self::Specific(dep_ver) => {
                     let specific = dep_ver
                         .clone()
                         .pull_metadata(Some(sources), true, pool)
                         .await
-                        .wrap(location!())?;
+                        .wrap(&cause)?;
                     ProcessedMetaData::get_metadata(
                         &specific.name,
                         Some(&specific.version.to_string()),
@@ -78,7 +81,7 @@ impl DependKind {
                         pool,
                     )
                     .await
-                    .wrap(location!())?
+                    .wrap(&cause)?
                 }
                 Self::Volatile(volatile) => {
                     if which(volatile) {
@@ -86,19 +89,19 @@ impl DependKind {
                     } else {
                         ProcessedMetaData::get_metadata(volatile, None, sources, true, pool)
                             .await
-                            .wrap(location!())?
+                            .wrap(&cause)?
                     }
                 }
             };
             let specific = Specific {
                 name: dep.name.to_string(),
-                version: Version::parse(&dep.version).wrap(location!())?,
+                version: Version::parse(&dep.version).wrap(&cause)?,
             };
             if !prior.contains(&specific) {
                 prior.insert(specific);
-                let child = Box::pin(ProcessedMetaData::get_depends(&dep, sources, prior, pool))
+                let child = Box::pin(dep.get_depends(sources, prior, pool))
                     .await
-                    .wrap(location!())?;
+                    .wrap(&cause)?;
                 result.push(child);
             }
         }
@@ -149,11 +152,11 @@ impl DependKind {
     }
     async fn is_installed(&self, pool: &SqlitePool) -> bool {
         match self {
-            Self::Latest(latest) => match get_installed_metadata(latest, pool).await {
+            Self::Latest(latest) => match InstalledMetaData::open(latest, pool).await {
                 Ok(data) => data.is_some(),
                 Err(_) => false,
             },
-            Self::Specific(specific) => match get_installed_metadata(&specific.name, pool).await {
+            Self::Specific(specific) => match InstalledMetaData::open(&specific.name, pool).await {
                 Ok(data) => {
                     if let Some(data) = data {
                         let prior = Version::parse(&data.version).ok().map(|x| {
@@ -174,7 +177,7 @@ impl DependKind {
                 if which(volatile) {
                     true
                 } else {
-                    match get_installed_metadata(volatile, pool).await {
+                    match InstalledMetaData::open(volatile, pool).await {
                         Ok(value) => value.is_some(),
                         Err(_) => false,
                     }
@@ -189,20 +192,24 @@ impl DependKind {
             Self::Volatile(volatile) => volatile.to_string(),
         }
     }
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing bytes to DependKind"});
         let mut chars = input.chars();
-        let kind = chars.next().context(OtherSnafu {
-            error: "Missing type identifier!",
-        })?;
+        let kind = chars
+            .next()
+            .context(OtherSnafu {
+                error: "Missing type identifier!",
+            })
+            .wrap(&cause)?;
         let data = chars.collect::<String>();
         match kind as u8 {
             1 => Ok(Self::Latest(data)),
-            2 => Ok(Self::Specific(DepVer::parse(&data).wrap(location!())?)),
+            2 => Ok(Self::Specific(DepVer::parse(&data).wrap(&cause)?)),
             3 => Ok(Self::Volatile(data)),
-            kind => Err(WrappedError::Other {
-                error: format!("Invalid kind identifier `{kind}`!").into(),
-                loc: location!(),
-            }),
+            kind => Err(StatefulError::new(
+                format!("Invalid kind identifier `{kind}`!"),
+                &cause,
+            )),
         }
     }
 }
@@ -221,7 +228,7 @@ impl Display for DependKind {
 pub struct DependKindVec(pub Vec<DependKind>);
 
 impl DependKindVec {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
         if input.is_empty() {
             return Ok(Self(Vec::new()));
         }
@@ -275,6 +282,13 @@ impl<'a> Decode<'a, Sqlite> for DependKindVec {
         value: <Sqlite as sqlx::Database>::ValueRef<'a>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let data: String = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::parse(&data)?)
+        Ok(Self::parse(&data)
+            .wrap(&json!({"action": "decoding cached DependKind"}))
+            .map_err(|e| {
+                OtherSnafu {
+                    error: e.to_string(),
+                }
+                .build()
+            })?)
     }
 }

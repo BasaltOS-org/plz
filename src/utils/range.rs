@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, location};
+use serde_json::json;
+use snafu::OptionExt;
 use std::fmt::Display;
 
-use crate::errors::{OtherSnafu, Wrapped, WrappedError};
+use crate::errors::{OtherSnafu, StatefulError, Wrapped};
 use crate::utils::verreq::VerReq;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -39,12 +40,26 @@ impl Range {
     pub fn negotiate(&self, prior: Option<Self>) -> Option<Self> {
         self.upper.negotiate(self.lower.negotiate(prior))
     }
-    pub fn parse(input: &str) -> Result<Self, WrappedError> {
-        let (lower, upper) = input.split_once(' ').context(OtherSnafu {
-            error: "Missing Range field `upper`!",
+    pub fn parse(input: &str) -> Result<Self, StatefulError> {
+        let mut cause = json!({"action": "parsing bytes to Range"});
+        let (lower, upper) = input
+            .split_once(' ')
+            .context(OtherSnafu {
+                error: "Missing Range field `upper`!",
+            })
+            .wrap(&cause)?;
+        let lower = VerReq::parse(lower).wrap({
+            cause
+                .as_object_mut()
+                .map(|x| x.insert(String::from("constraint"), json!("lower")));
+            &cause
         })?;
-        let lower = VerReq::parse(lower).wrap(location!())?;
-        let upper = VerReq::parse(upper).wrap(location!())?;
+        let upper = VerReq::parse(upper).wrap({
+            cause
+                .as_object_mut()
+                .map(|x| x.insert(String::from("constraint"), json!("upper")));
+            &cause
+        })?;
         Ok(Self { lower, upper })
     }
 }

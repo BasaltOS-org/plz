@@ -1,7 +1,8 @@
-use snafu::{OptionExt, location};
+use serde_json::json;
+use snafu::OptionExt;
 
 use crate::commands::Command;
-use crate::errors::{OtherSnafu, Wrapped, WrappedError};
+use crate::errors::{OtherSnafu, StatefulError, Wrapped};
 use crate::flags::Flag;
 use crate::settings::{SettingsJson, acquire_lock, remove_lock};
 use crate::statebox::StateBox;
@@ -29,36 +30,43 @@ pub fn build(hierarchy: &[String]) -> Command {
 
 pub async fn set_handle(states: &mut StateBox, arg: Option<String>) {
     if let Err(error) = internal_set_handle(states, arg).await {
-        println!("{error:?}")
+        println!("{error}")
     }
 }
 async fn internal_set_handle(
     states: &mut StateBox,
     arg: Option<String>,
-) -> Result<(), WrappedError> {
-    if acquire_lock().await.wrap(location!())?.is_some() {
-        return Err(WrappedError::Other {
-            error: "Did not expect a `PostAction` at this time.".into(),
-            loc: location!(),
-        });
+) -> Result<(), StatefulError> {
+    let cause = json!({"action": "setting handle"});
+    if acquire_lock().await.wrap(&cause)?.is_some() {
+        return Err(StatefulError::new(
+            "Did not expect a `PostAction` at this time.",
+            &cause,
+        ));
     };
-    let settings = SettingsJson::get_settings().await.wrap(location!())?;
-    set_func(states, arg, settings).await.wrap(location!())?;
-    remove_lock().await.wrap(location!())
+    let settings = SettingsJson::get_settings().await.wrap(&cause)?;
+    set_func(states, arg, settings).await.wrap(&cause)?;
+    remove_lock().await.wrap(&cause)
 }
 
 async fn set_func(
     states: &mut StateBox,
     arg: Option<String>,
     mut settings: SettingsJson,
-) -> Result<(), WrappedError> {
+) -> Result<(), StatefulError> {
+    let cause = json!({"action": "setting function from CLI arguments"});
     // let arg = arg.WrappedEver_context("Missing an argument!")?;
-    let arg = arg.context(OtherSnafu {
-        error: "Missing an argument!",
-    })?;
-    let (key, value) = arg.split_once('=').context(OtherSnafu {
-        error: "Invalid syntax. please use `--set \"key=value\"`.",
-    })?;
+    let arg = arg
+        .context(OtherSnafu {
+            error: "Missing an argument!",
+        })
+        .wrap(&cause)?;
+    let (key, value) = arg
+        .split_once('=')
+        .context(OtherSnafu {
+            error: "Invalid syntax. please use `--set \"key=value\"`.",
+        })
+        .wrap(&cause)?;
     match key {
         "exec" => {
             let val = if value.is_empty() {
@@ -71,22 +79,16 @@ async fn set_func(
                 settings.exec
             );
             if states.get("yes").is_none_or(|x: &bool| !*x)
-                && !choice("Proceed?", true).wrap(location!())?
+                && !choice("Proceed?", true).wrap(&cause)?
             {
-                return Err(WrappedError::Other {
-                    error: "Operation aborted by user.".into(),
-                    loc: location!(),
-                });
+                return Err(StatefulError::new("Operation aborted by user.", &cause));
             }
             settings.exec = val;
         }
         _ => {
-            return Err(WrappedError::Other {
-                error: "Unrecognized key {key}!".into(),
-                loc: location!(),
-            });
+            return Err(StatefulError::new("Unrecognized key {key}!", &cause));
         }
     }
-    settings.set_settings().await.wrap(location!())?;
+    settings.set_settings().await.wrap(&cause)?;
     Ok(())
 }

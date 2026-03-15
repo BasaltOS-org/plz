@@ -1,8 +1,9 @@
-use snafu::{OptionExt, ResultExt, location};
+use serde_json::json;
+use snafu::{OptionExt, ResultExt};
 use sqlx::{Sqlite, SqlitePool, query_as};
 use std::collections::HashSet;
 
-use crate::errors::{OtherSnafu, SQLSnafu, Wrapped, WrappedError};
+use crate::errors::{OtherSnafu, SQLSnafu, StatefulError, Wrapped};
 use crate::metadata::{
     depend_kind::DependKind,
     installed::InstalledMetaData,
@@ -18,17 +19,6 @@ pub mod installed;
 pub mod parsers;
 pub mod processed;
 pub mod versioning;
-
-async fn get_installed_metadata(
-    name: &str,
-    pool: &SqlitePool,
-) -> Result<Option<InstalledMetaData>, WrappedError> {
-    query_as::<Sqlite, InstalledMetaData>("SELECT * FROM installed WHERE name = ?")
-        .bind(name)
-        .fetch_optional(pool)
-        .await
-        .context(SQLSnafu)
-}
 
 #[derive(Debug)]
 pub struct QueuedChanges {
@@ -59,11 +49,13 @@ impl QueuedChanges {
     pub fn has_deps(&self) -> bool {
         !self.secondary.is_empty()
     }
-    pub async fn dependents(&mut self, pool: &SqlitePool) -> Result<(), WrappedError> {
+    pub async fn dependents(&mut self, pool: &SqlitePool) -> Result<(), StatefulError> {
         let mut items = self.primary.iter().cloned().collect::<Vec<Specific>>();
         items.extend_from_slice(&self.secondary.iter().cloned().collect::<Vec<Specific>>());
         for item in items {
-            item.get_dependents(self, pool).await.wrap(location!())?;
+            item.get_dependents(self, pool)
+                .await
+                .wrap(&json!({"action": "adding dependents to QueuedChanges"}))?;
         }
         Ok(())
     }
@@ -93,10 +85,11 @@ impl InstallPackage {
         }
         data
     }
-    pub async fn install(self) -> Result<(), WrappedError> {
-        let pool = get_pool().await.wrap(location!())?;
+    pub async fn install(self) -> Result<(), StatefulError> {
+        let cause = json!({"action": "installing package to disk", "package": self.metadata.name.to_string()});
+        let pool = get_pool().await.wrap(&cause)?;
         let self_name = self.metadata.name.to_string();
-        let mut collected: Vec<ProcessedMetaData> = self.collect().wrap(location!())?;
+        let mut collected: Vec<ProcessedMetaData> = self.collect().wrap(&cause)?;
         let depends = collected
             .iter()
             .map(|x| {
@@ -141,12 +134,12 @@ impl InstallPackage {
                     )
                     .context(OtherSnafu {
                         error: format!("Common version of dependent `{name}` could not be negotiated by dependencies for package `{self_name}`.")
-                    })?;
+                    }).wrap(&cause)?;
                 set.sort_by_key(|x| Version::parse(&x.version).ok());
                 set.reverse();
                 let mut chosen = None;
                 for metadata in set {
-                    let ver_req = VerReq::Eq(Version::parse(&metadata.version).wrap(location!())?);
+                    let ver_req = VerReq::Eq(Version::parse(&metadata.version).wrap(&cause)?);
                     let new_range = Range {
                         lower: ver_req.clone(),
                         upper: ver_req,
@@ -156,27 +149,30 @@ impl InstallPackage {
                         break;
                     }
                 }
-                let chosen = chosen.context(OtherSnafu {
-                    error: format!(
-                        "No version of dependent `{name}` could be agreed by dependencies."
-                    ),
-                })?;
+                let chosen = chosen
+                    .context(OtherSnafu {
+                        error: format!(
+                            "No version of dependent `{name}` could be agreed by dependencies."
+                        ),
+                    })
+                    .wrap(&cause)?;
                 filtered.push(chosen);
             }
         }
         for metadata in filtered {
-            metadata.install_package(&pool).await.wrap(location!())?;
+            metadata.install_package(&pool).await.wrap(&cause)?;
         }
         Ok(())
     }
-    pub fn collect(self) -> Result<Vec<ProcessedMetaData>, WrappedError> {
+    pub fn collect(self) -> Result<Vec<ProcessedMetaData>, StatefulError> {
+        let cause = json!({"action": "collecting package dependencies", "package": self.metadata.name.to_string()});
         let mut result = Vec::new();
         for dep in self.build_deps {
-            let data = dep.collect().wrap(location!())?;
+            let data = dep.collect().wrap(&cause)?;
             result.extend_from_slice(&data);
         }
         for dep in self.run_deps {
-            let data = dep.collect().wrap(location!())?;
+            let data = dep.collect().wrap(&cause)?;
             result.extend_from_slice(&data);
         }
         result.push(self.metadata);
@@ -186,17 +182,18 @@ impl InstallPackage {
 
 pub async fn get_packages(
     args: &[(&String, Option<&String>)],
-) -> Result<Vec<InstallPackage>, WrappedError> {
-    let pool = get_pool().await.wrap(location!())?;
+) -> Result<Vec<InstallPackage>, StatefulError> {
+    let cause = json!({"action": "collecting packages to install"});
+    let pool = get_pool().await.wrap(&cause)?;
     print!("\x1B[2K\rBuilding dependency tree... 0%");
-    let settings = SettingsJson::get_settings().await.wrap(location!())?;
+    let settings = SettingsJson::get_settings().await.wrap(&cause)?;
     let mut result = Vec::new();
     let mut seen = HashSet::new();
     let count = args.len();
     for (i, package) in args.iter().enumerate() {
         if let Some(data) = get_package(&settings.sources, package, false, &mut seen, &pool)
             .await
-            .wrap(location!())?
+            .wrap(&cause)?
         {
             result.push(data);
         }
@@ -212,21 +209,23 @@ async fn get_package(
     dependent: bool,
     prior: &mut HashSet<Specific>,
     pool: &SqlitePool,
-) -> Result<Option<InstallPackage>, WrappedError> {
+) -> Result<Option<InstallPackage>, StatefulError> {
     let (app, version) = dep;
+    let cause = json!({"action": "retrieving package as InstallPackage", "package": app});
     let metadata =
         ProcessedMetaData::get_metadata(app, version.map(|x| x.as_str()), sources, dependent, pool)
             .await
-            .wrap(location!())?;
+            .wrap(&cause)?;
     if let Ok(Some(installed)) = InstalledMetaData::open(&metadata.name, pool).await
         && installed.version == metadata.version
     {
         return Ok(None);
     };
     Ok(Some(
-        ProcessedMetaData::get_depends(&metadata, sources, prior, pool)
+        metadata
+            .get_depends(sources, prior, pool)
             .await
-            .wrap(location!())?,
+            .wrap(&cause)?,
     ))
 }
 
@@ -234,19 +233,27 @@ async fn get_package(
 /* #region Remove/Purge */
 pub async fn get_local_pkgs(
     args: &[(&String, Option<&String>)],
-) -> Result<QueuedChanges, WrappedError> {
-    let pool = get_pool().await.wrap(location!())?;
+) -> Result<Option<QueuedChanges>, StatefulError> {
+    let cause = json!({"action": "collecting packages to remove"});
+    let pool = get_pool().await.wrap(&cause)?;
     print!("\x1B[2K\rCollecting packages... 0%");
     let mut seen = HashSet::new();
     let count = args.len();
     let mut result = QueuedChanges::new();
     for (i, dep) in args.iter().enumerate() {
         print!("\rCollecting packages... {}% ", i * 100 / count);
-        result.extend(get_local_pkg(dep, &mut seen, true, &pool).await?);
+        if let Some(package) = get_local_pkg(dep, &mut seen, true, &pool)
+            .await
+            .wrap(&cause)?
+        {
+            result.extend(package);
+        } else {
+            return Ok(None);
+        }
     }
     print!("\rCollecting packages... Done!");
-    result.dependents(&pool).await.wrap(location!())?;
-    Ok(result)
+    result.dependents(&pool).await.wrap(&cause)?;
+    Ok(Some(result))
 }
 
 async fn get_local_pkg(
@@ -254,37 +261,38 @@ async fn get_local_pkg(
     prior: &mut HashSet<String>,
     root: bool,
     pool: &SqlitePool,
-) -> Result<QueuedChanges, WrappedError> {
+) -> Result<Option<QueuedChanges>, StatefulError> {
     let (dep, ver) = *dep;
+    let cause = json!({"action": "retrieving local package", "package": dep});
     let data = match InstalledMetaData::open(dep, pool)
         .await
-        .wrap(location!())?
+        .wrap(&cause)?
         .context(OtherSnafu {
             error: format!("Failed to locate `{dep}`!"),
         }) {
         Ok(data) => data,
         fault => {
             if root {
-                fault.wrap_with(
-                    "Attempted to remove a package that isn't installed!".into(),
-                    location!(),
-                )?
+                return Ok(None);
             } else {
-                fault.wrap(location!())?
+                fault.wrap(&cause)?
             }
         }
     };
-    let mut working = Vec::new();
-    if let Some(ver) = ver {
+    let working = if let Some(ver) = ver {
         if data.version == *ver {
-            working.push(data);
+            Some(data)
+        } else {
+            None
         }
     } else if !data.dependent {
-        working.push(data);
-    }
+        Some(data)
+    } else {
+        None
+    };
     let mut result = QueuedChanges::new();
-    for version in working {
-        for dependency in &version.dependencies.0 {
+    if let Some(working) = working {
+        for dependency in &working.dependencies.0 {
             if prior.contains(&dependency.name) {
                 continue;
             } else {
@@ -300,28 +308,28 @@ async fn get_local_pkg(
                 pool,
             ))
             .await
-            .wrap_with(
-                format!("Nested loop for package `{}`.", version.name).into(),
-                location!(),
-            )?;
+            .wrap(&json!({"action": "nested dependency resolution", "package": working.name, "dependency": dependency.name}))?
+            .unwrap_or_default();
+            // let items = items.unwrap_or_default();
             result.extend(items);
             result.insert_secondary(dep);
         }
         if root {
             result.insert_primary(Specific {
-                name: version.name.to_string(),
-                version: Version::parse(&version.version).wrap(location!())?,
+                name: working.name.to_string(),
+                version: Version::parse(&working.version).wrap(&cause)?,
             });
         }
     }
-    Ok(result)
+    Ok(Some(result))
 }
 
 /* #endregion Remove/Purge */
 /* #region Update */
-pub async fn collect_updates() -> Result<(), WrappedError> {
-    let pool = get_pool().await.wrap(location!())?;
-    let _settings = SettingsJson::get_settings().await.wrap(location!())?;
+pub async fn collect_updates() -> Result<(), StatefulError> {
+    let cause = json!({"action": "collecting updatable packages"});
+    let pool = get_pool().await.wrap(&cause)?;
+    let _settings = SettingsJson::get_settings().await.wrap(&cause)?;
     print!("\x1B[2K\rReading package lists... 0%");
     // let path = get_metadata_dir().nest("Get Metadata Directory")?;
     // let dir = fs::read_dir(&path)
@@ -338,7 +346,8 @@ pub async fn collect_updates() -> Result<(), WrappedError> {
     let _children = query_as::<Sqlite, InstalledMetaData>("SELECT * FROM installed WHERE kind = 0")
         .fetch_all(&pool)
         .await
-        .context(SQLSnafu)?;
+        .context(SQLSnafu)
+        .wrap(&cause)?;
     // let mut result = Vec::new();
     // let count = children.len();
     // for (i, child) in children.into_iter().enumerate() {
@@ -378,7 +387,7 @@ pub async fn collect_updates() -> Result<(), WrappedError> {
 // async fn collect_update(
 //     path: PathBuf,
 //     sources: &[OriginKind],
-// ) -> Result<Vec<ProcessedMetaData>, WrappedError> {
+// ) -> Result<Vec<ProcessedMetaData>, StatefulError> {
 //     let mut result = Vec::new();
 //     if path.extension().is_none_or(|x| x != "json") {
 //         return Ok(Vec::new());
@@ -404,7 +413,7 @@ pub async fn collect_updates() -> Result<(), WrappedError> {
 // }
 /* #endregion Update */
 /* #region Upgrade */
-pub fn upgrade_all() -> Result<Vec<ProcessedMetaData>, WrappedError> {
+pub fn upgrade_all() -> Result<Vec<ProcessedMetaData>, StatefulError> {
     // let path = get_update_dir().wrap(location!())?;
     // let dir = fs::read_dir(&path)
     //     .context(IOSnafu {
@@ -428,8 +437,8 @@ pub fn upgrade_all() -> Result<Vec<ProcessedMetaData>, WrappedError> {
 
 pub fn upgrade_only(
     pkgs: &[(&String, Option<&String>)],
-) -> Result<Vec<ProcessedMetaData>, WrappedError> {
-    let base = upgrade_all().wrap(location!())?;
+) -> Result<Vec<ProcessedMetaData>, StatefulError> {
+    let base = upgrade_all().wrap(&json!({"action": "upgrading selected packages"}))?;
     let base = base.iter();
     let mut result = HashSet::new();
     for pkg in pkgs {
@@ -455,16 +464,17 @@ pub fn upgrade_only(
     Ok(result.into_iter().collect())
 }
 
-pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), WrappedError> {
-    let pool = get_pool().await.wrap(location!())?;
-    let settings = SettingsJson::get_settings().await.wrap(location!())?;
+pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), StatefulError> {
+    let cause = json!({"action": "upgrading all upgradable packages"});
+    let pool = get_pool().await.wrap(&cause)?;
+    let settings = SettingsJson::get_settings().await.wrap(&cause)?;
     for package in packages {
         println!("Upgrading `{}`...", package.name);
         package
             .upgrade_package(&settings.sources, &pool)
             .await
-            .wrap(location!())?;
-        package.remove_update_cache(&pool).await.wrap(location!())?;
+            .wrap(&cause)?;
+        package.remove_update_cache(&pool).await.wrap(&cause)?;
     }
     println!("Done!");
     Ok(())
@@ -472,14 +482,17 @@ pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), Wrap
 
 /* #endregion Upgrade */
 /* #region Unbind */
-pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), WrappedError> {
-    let pool = get_pool().await.wrap(location!())?;
+pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), StatefulError> {
+    let cause = json!({"action": "unbinding packages to become independent"});
+    let pool = get_pool().await.wrap(&cause)?;
     for bit in data {
         let (dep, ver) = *bit;
-        let data = get_installed_metadata(dep, &pool).await.wrap(location!())?;
-        let mut data = data.context(OtherSnafu {
-            error: format!("Cannot find data for package `{dep}`!"),
-        })?;
+        let data = InstalledMetaData::open(dep, &pool).await.wrap(&cause)?;
+        let mut data = data
+            .context(OtherSnafu {
+                error: format!("Cannot find data for package `{dep}`!"),
+            })
+            .wrap(&cause)?;
         if let Some(ver) = ver {
             println!("Unbinding `{dep}` version {ver}...",);
             if data.version == *ver {
@@ -501,7 +514,7 @@ pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), WrappedEr
                 );
             }
         };
-        data.write(&pool).await.wrap(location!())?;
+        data.write(&pool).await.wrap(&cause)?;
     }
     Ok(())
 }

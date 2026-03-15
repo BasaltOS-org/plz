@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, location};
+use serde_json::json;
+use snafu::{OptionExt, ResultExt};
 use sqlx::{Decode, Encode, Sqlite, Type};
 use std::{fmt::Display, io::Write, path::PathBuf, thread::sleep};
 use tokio::{
@@ -8,12 +9,13 @@ use tokio::{
     time::Duration,
 };
 
-use crate::errors::{JSONSnafu, OtherSnafu, TokioIOSnafu, Wrapped, WrappedError};
-use crate::utils::{PostAction, get_dir, is_root};
+use crate::errors::{JSONSnafu, OtherSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped};
+use crate::utils::{PostAction, get_dir, is_root, which};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct SettingsJson {
     pub locked: bool,
+    pub shell: ShellType,
     pub version: String,
     pub arch: Arch,
     pub exec: Option<String>,
@@ -21,8 +23,25 @@ pub struct SettingsJson {
 }
 
 impl SettingsJson {
-    pub fn new() -> Self {
-        let mut command = std::process::Command::new("/usr/bin/uname");
+    pub fn new() -> Result<Self, StatefulError> {
+        let cause = json!({"action": "constructing settings"});
+        let shell = if which("fish") {
+            ShellType::Fish
+        } else if which("bash") {
+            ShellType::Bash
+        } else if which("zsh") {
+            ShellType::Zsh
+        } else if which("ash") {
+            ShellType::Ash
+        } else if which("sh") {
+            ShellType::Sh
+        } else {
+            return Err(StatefulError::new(
+                "No compatible shell interpreters installed!",
+                &cause,
+            ));
+        };
+        let mut command = std::process::Command::new("uname");
         let arch = if let Ok(output) = command.arg("-m").output() {
             match String::from_utf8_lossy(&output.stdout)
                 .to_string()
@@ -30,20 +49,30 @@ impl SettingsJson {
                 .trim()
             {
                 "x86_64" => {
-                    let mut command = std::process::Command::new("/usr/bin/bash");
-                    command.arg("-c").arg("(lscpu|grep -q avx512f&&echo 4&&exit||lscpu|grep -q avx2&&echo 3&&exit||lscpu|grep -q sse4_2&&echo 2&&exit||echo 1)");
-                    if let Ok(output) = command.output() {
-                        match String::from_utf8_lossy(&output.stdout)
-                            .to_string()
-                            .as_str()
-                            .trim()
-                        {
-                            "4" | "3" => Arch::X86_64v3,
-                            "2" | "1" => Arch::X86_64v1,
-                            _ => Arch::NoArch,
-                        }
+                    let mut command = std::process::Command::new("cat");
+                    command.arg("/proc/cpuinfo");
+                    let output = command.output().context(StdIOSnafu).wrap(&cause)?;
+                    let splits = String::from_utf8_lossy(&output.stdout);
+                    let splits = splits.split_whitespace().collect::<Vec<&str>>();
+                    if ["avx512f", "avx512bw", "avx512cd", "avx512dq", "avx512vl"]
+                        .iter()
+                        .all(|x| splits.contains(x))
+                    {
+                        Arch::X86_64v4
+                    } else if [
+                        "avx", "avx2", "bmi1", "bmi2", "f16c", "fma", "abm", "movbe", "xsave",
+                    ]
+                    .iter()
+                    .all(|x| splits.contains(x))
+                    {
+                        Arch::X86_64v3
+                    } else if ["cx16", "lahf", "popcnt", "sse4_1", "sse4_2", "ssse3"]
+                        .iter()
+                        .all(|x| splits.contains(x))
+                    {
+                        Arch::X86_64v2
                     } else {
-                        Arch::NoArch
+                        Arch::X86_64
                     }
                 }
                 "aarch64" => Arch::Aarch64,
@@ -54,39 +83,55 @@ impl SettingsJson {
         } else {
             Arch::NoArch
         };
-        Self {
+        Ok(Self {
             locked: false,
+            shell,
             version: env!("SETTINGS_JSON_VERSION").to_string(),
             arch,
             exec: None,
             sources: Vec::new(),
-        }
+        })
     }
-    pub async fn set_settings(self) -> Result<(), WrappedError> {
-        let mut file = File::create(affirm_path().await.wrap(location!())?)
+    pub async fn set_settings(self) -> Result<(), StatefulError> {
+        let cause = json!({"action": "writing settings to disk"});
+        let mut file = File::create(affirm_path().await.wrap(&cause)?)
             .await
-            .context(TokioIOSnafu)?;
-        let settings = serde_json::to_string(&self).context(JSONSnafu)?;
+            .context(TokioIOSnafu)
+            .wrap(&cause)?;
+        let settings = serde_json::to_string(&self)
+            .context(JSONSnafu)
+            .wrap(&cause)?;
         file.write_all(settings.as_bytes())
             .await
             .context(TokioIOSnafu)
+            .wrap(&cause)
     }
-    pub async fn get_settings() -> Result<Self, WrappedError> {
-        let mut file = File::open(affirm_path().await.wrap(location!())?)
+    pub async fn get_settings() -> Result<Self, StatefulError> {
+        let cause = json!({"action": "reading settings from disk"});
+        let mut file = File::open(affirm_path().await.wrap(&cause)?)
             .await
-            .context(TokioIOSnafu)?;
+            .context(TokioIOSnafu)
+            .wrap(&cause)?;
         let mut sources = String::new();
         file.read_to_string(&mut sources)
             .await
-            .context(TokioIOSnafu)?;
-        serde_json::from_str(&sources).context(JSONSnafu)
+            .context(TokioIOSnafu)
+            .wrap(&cause)?;
+        serde_json::from_str(&sources)
+            .context(JSONSnafu)
+            .wrap(&cause)
     }
-}
+    // async fn shell(&mut self) -> Result<String, StatefulError> {
+    //     match self.shell {
+    //         ShellType::Fish => Ok(String::from("fish")),
+    //         ShellType::Bash => Ok(String::from("bash")),
+    //         ShellType::Ash => Ok(String::from("ash")),
+    //         ShellType::Sh => Ok(String::from("sh")),
+    //         ShellType::None => {
 
-impl Default for SettingsJson {
-    fn default() -> Self {
-        Self::new()
-    }
+    //         }
+    //     }
+    // }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -104,25 +149,24 @@ pub enum OriginKind {
 }
 
 impl OriginKind {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing bytes to OriginKind"});
         let mut chars = input.chars();
-        let kind = chars.next().ok_or(WrappedError::Other {
-            error: "Missing type identifier!".into(),
-            loc: location!(),
-        })?;
+        let kind = chars
+            .next()
+            .ok_or(StatefulError::new("Missing type identifier!", &cause))?;
         let data = chars.collect::<String>();
         match kind as u8 {
             0 => {
                 let mut splits = data.split(' ');
-                let source = splits.next().context(OtherSnafu {
-                    error: "Missing APT field `source`!",
-                })?;
-                let code = splits.next().context(OtherSnafu {
-                    error: "Missing APT field `code`!",
-                })?;
-                let kind = splits.next().context(OtherSnafu {
-                    error: "Missing APT field `kind`!",
-                })?;
+                let ((source, code), kind) = splits
+                    .next()
+                    .zip(splits.next())
+                    .zip(splits.next())
+                    .context(OtherSnafu {
+                        error: "Missing required APT fields!",
+                    })
+                    .wrap(&cause)?;
                 let kind = match kind {
                     "main" => AptKind::Main,
                     "multiverse" => AptKind::Multiverse,
@@ -138,18 +182,21 @@ impl OriginKind {
             }
             1 => Ok(Self::Plz(data.to_string())),
             2 => {
-                let (user, repo) = data.split_once(' ').context(OtherSnafu {
-                    error: "Missing GH field `repo`!",
-                })?;
+                let (user, repo) = data
+                    .split_once(' ')
+                    .context(OtherSnafu {
+                        error: "Missing GH field `repo`!",
+                    })
+                    .wrap(&cause)?;
                 Ok(Self::Github {
                     user: user.to_string(),
                     repo: repo.to_string(),
                 })
             }
-            kind => Err(WrappedError::Other {
-                error: format!("Invalid kind identifier `{kind}`!").into(),
-                loc: location!(),
-            }),
+            kind => Err(StatefulError::new(
+                format!("Invalid kind identifier `{kind}`!"),
+                &cause,
+            )),
         }
     }
 }
@@ -195,7 +242,14 @@ impl<'a> Decode<'a, Sqlite> for OriginKind {
         value: <Sqlite as sqlx::Database>::ValueRef<'a>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let data: String = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::parse(&data)?)
+        Ok(Self::parse(&data)
+            .wrap(&json!({"action": "decoding APT origins from settings"}))
+            .map_err(|e| {
+                OtherSnafu {
+                    error: e.to_string(),
+                }
+                .build()
+            })?)
     }
 }
 
@@ -223,8 +277,10 @@ impl Display for AptKind {
 #[derive(Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Arch {
     Any,
-    X86_64v1,
+    X86_64,
+    X86_64v2,
     X86_64v3,
+    X86_64v4,
     Aarch64,
     Armv7l,
     Armv8l,
@@ -232,50 +288,60 @@ pub enum Arch {
 }
 
 impl Arch {
-    pub async fn is_compatible(&self, name: &str) -> Result<bool, WrappedError> {
-        let installed = SettingsJson::get_settings().await.wrap(location!())?.arch;
+    pub async fn is_compatible(&self, name: &str) -> Result<bool, StatefulError> {
+        let cause = json!({"action": "asserting CPU architecture compatibility"});
+        let installed = SettingsJson::get_settings().await.wrap(&cause)?.arch;
         match self {
             Self::Any => Ok(true),
-            Self::X86_64v1 => Ok([Self::X86_64v1, Self::X86_64v3].contains(&installed)),
-            Self::NoArch => Err(WrappedError::Other {
-                error: format!("Unrecognized architecture in package {name}!").into(),
-                loc: location!(),
-            }),
+            Self::X86_64 => Ok(
+                [Self::X86_64, Self::X86_64v2, Self::X86_64v3, Self::X86_64v4].contains(&installed),
+            ),
+            Self::NoArch => Err(StatefulError::new(
+                format!("Unrecognized architecture in package {name}!"),
+                &cause,
+            )),
             other => Ok(installed == *other),
         }
     }
 }
 
-async fn affirm_path() -> Result<PathBuf, WrappedError> {
-    let mut path = get_dir().await.wrap(location!())?;
+async fn affirm_path() -> Result<PathBuf, StatefulError> {
+    let cause = json!({"action": "affirming settings file exists"});
+    let mut path = get_dir().await.wrap(&cause)?;
     path.push("settings.json");
     if !path.exists() {
-        let mut file = File::create(&path).await.context(TokioIOSnafu)?;
-        let new_settings = serde_json::to_string(&SettingsJson::new()).context(JSONSnafu)?;
+        let mut file = File::create(&path)
+            .await
+            .context(TokioIOSnafu)
+            .wrap(&cause)?;
+        let new_settings = serde_json::to_string(&SettingsJson::new().wrap(&cause)?)
+            .context(JSONSnafu)
+            .wrap(&cause)?;
 
         file.write_all(new_settings.as_bytes())
             .await
-            .context(TokioIOSnafu)?;
+            .context(TokioIOSnafu)
+            .wrap(&cause)?;
         Ok(path)
     } else if path.is_file() {
         Ok(path)
     } else {
-        Err(WrappedError::Other {
-            error: format!(
+        Err(StatefulError::new(
+            format!(
                 "Path {} is not of the expected type. Is it a real file?",
                 path.display()
-            )
-            .into(),
-            loc: location!(),
-        })
+            ),
+            &cause,
+        ))
     }
 }
 
-pub async fn acquire_lock() -> Result<Option<PostAction>, WrappedError> {
+pub async fn acquire_lock() -> Result<Option<PostAction>, StatefulError> {
+    let cause = json!({"action": "locking the settings file to our process"});
     if !is_root() {
         return Ok(Some(PostAction::Elevate));
     }
-    let mut settings = SettingsJson::get_settings().await.wrap(location!())?;
+    let mut settings = SettingsJson::get_settings().await.wrap(&cause)?;
     loop {
         if settings.locked {
             for i in 0..20 {
@@ -319,21 +385,41 @@ pub async fn acquire_lock() -> Result<Option<PostAction>, WrappedError> {
                 sleep(Duration::from_millis(50));
             }
             println!("\x1B[2K\r\x1B[92mAwaiting program lock. Retrying now\x1B[0m...");
-            settings = SettingsJson::get_settings().await.wrap(location!())?;
+            settings = SettingsJson::get_settings().await.wrap(&cause)?;
         } else {
             break;
         }
     }
-    if settings.sources.is_empty() {
-        return Ok(Some(PostAction::PullSources));
-    }
     settings.locked = true;
-    settings.set_settings().await.wrap(location!())?;
+    settings.set_settings().await.wrap(&cause)?;
     Ok(None)
 }
 
-pub async fn remove_lock() -> Result<(), WrappedError> {
-    let mut settings = SettingsJson::get_settings().await.wrap(location!())?;
+pub async fn remove_lock() -> Result<(), StatefulError> {
+    let cause = json!({"action": "unlocking the settings file from our process"});
+    let mut settings = SettingsJson::get_settings().await.wrap(&cause)?;
     settings.locked = false;
-    settings.set_settings().await.wrap(location!())
+    settings.set_settings().await.wrap(&cause)
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub enum ShellType {
+    Fish,
+    Zsh,
+    Bash,
+    Ash,
+    Sh,
+    Custom(String),
+}
+impl Display for ShellType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Fish => "fish",
+            Self::Zsh => "zsh",
+            Self::Bash => "bash",
+            Self::Ash => "ash",
+            Self::Sh => "sh",
+            Self::Custom(custom) => custom,
+        })
+    }
 }

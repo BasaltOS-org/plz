@@ -1,7 +1,7 @@
-use snafu::location;
+use serde_json::json;
 
 use crate::commands::Command;
-use crate::errors::{Wrapped, WrappedError};
+use crate::errors::{StatefulError, Wrapped};
 use crate::metadata::get_local_pkgs;
 use crate::settings::acquire_lock;
 use crate::statebox::StateBox;
@@ -49,12 +49,13 @@ async fn internal_run(
     states: &StateBox,
     args: Option<&[String]>,
     purge: bool,
-) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap(location!())? {
+) -> Result<PostAction, StatefulError> {
+    let cause = json!({"runner": "remove packages", "purge": purge});
+    if let Some(action) = acquire_lock().await.wrap(&cause)? {
         return Ok(action);
     };
     let mut args = match args {
-        None => return Ok(PostAction::NothingToDo),
+        None => return Ok(PostAction::NothingToDo("Nothing to do.")),
         Some(args) => args.iter(),
     };
     let mut data = Vec::new();
@@ -67,10 +68,12 @@ async fn internal_run(
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    let metadatas = get_local_pkgs(&data).await.wrap(location!())?;
+    let Some(metadatas) = get_local_pkgs(&data).await.wrap(&cause)? else {
+        return Ok(PostAction::NothingToDo("\x1B[2K\rPackage not installed."));
+    };
     println!();
     if metadatas.is_empty() {
-        return Ok(PostAction::NothingToDo);
+        return Ok(PostAction::NothingToDo("Nothing to do."));
     }
     let msg = if purge { "PURGED: " } else { "REMOVED:" };
     println!(
@@ -94,17 +97,14 @@ async fn internal_run(
             match choice("Continue?", true) {
                 Err(source) => return Err(source),
                 Ok(false) => {
-                    return Err(WrappedError::Other {
-                        error: "Operation aborted by user.".into(),
-                        loc: location!(),
-                    });
+                    return Ok(PostAction::NothingToDo("Operation aborted by user."));
                 }
                 Ok(true) => (),
             };
         }
     }
     for package in metadatas.primary {
-        package.remove(purge, None).await.wrap(location!())?;
+        package.remove(purge, None).await.wrap(&cause)?;
     }
     Ok(PostAction::Return)
 }

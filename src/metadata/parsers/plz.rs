@@ -1,7 +1,7 @@
 use serde::Deserialize;
-use snafu::location;
+use serde_json::json;
 
-use crate::errors::{Wrapped, WrappedError};
+use crate::errors::{StatefulError, Wrapped};
 use crate::metadata::{
     DepVer, DependKind, depend_kind,
     parsers::MetaDataKind,
@@ -25,7 +25,7 @@ pub struct RawPlz {
 }
 
 impl RawPlz {
-    pub fn to_process(self, dependent: bool) -> Result<ProcessedMetaData, WrappedError> {
+    pub fn to_processed(self, dependent: bool) -> Result<ProcessedMetaData, StatefulError> {
         let origin = if self.origin.starts_with("gh/") {
             let split = self
                 .origin
@@ -39,10 +39,10 @@ impl RawPlz {
                     repo: split[1].clone(),
                 }
             } else {
-                return Err(WrappedError::Other {
-                    error: "Invalid `origin` format!".into(),
-                    loc: location!(),
-                });
+                return Err(StatefulError::new(
+                    "Invalid `origin` format!",
+                    &json!({"action": "converting RawPlz to processed metadata", "package": self.name}),
+                ));
             }
         // } else if self.origin.starts_with("https://") {
         //     OriginKind::Url(self.origin.clone())
@@ -74,29 +74,30 @@ impl RawPlz {
             hash: self.hash,
         })
     }
-    fn parse_ver(ver: &str) -> Result<Range, WrappedError> {
+    fn parse_ver(ver: &str) -> Result<Range, StatefulError> {
+        let cause = json!({"action": "parsing apt version constraint"});
         let mut lower = VerReq::NoBound;
         let mut upper = VerReq::NoBound;
         if let Some(ver) = ver.strip_prefix(">>") {
-            lower = VerReq::Gt(Version::parse(ver).wrap(location!())?);
+            lower = VerReq::Gt(Version::parse(ver).wrap(&cause)?);
         } else if let Some(ver) = ver.strip_prefix(">=") {
-            lower = VerReq::Ge(Version::parse(ver).wrap(location!())?);
+            lower = VerReq::Ge(Version::parse(ver).wrap(&cause)?);
         } else if let Some(ver) = ver.strip_prefix("==") {
-            lower = VerReq::Eq(Version::parse(ver).wrap(location!())?);
-            upper = VerReq::Eq(Version::parse(ver).wrap(location!())?);
+            lower = VerReq::Eq(Version::parse(ver).wrap(&cause)?);
+            upper = VerReq::Eq(Version::parse(ver).wrap(&cause)?);
         } else if let Some(ver) = ver.strip_prefix("<=") {
-            upper = VerReq::Le(Version::parse(ver).wrap(location!())?);
+            upper = VerReq::Le(Version::parse(ver).wrap(&cause)?);
         } else if let Some(ver) = ver.strip_prefix("<<") {
-            upper = VerReq::Lt(Version::parse(ver).wrap(location!())?);
+            upper = VerReq::Lt(Version::parse(ver).wrap(&cause)?);
         } else {
-            lower = VerReq::Eq(Version::parse(ver).wrap(location!())?);
-            upper = VerReq::Eq(Version::parse(ver).wrap(location!())?);
+            lower = VerReq::Eq(Version::parse(ver).wrap(&cause)?);
+            upper = VerReq::Eq(Version::parse(ver).wrap(&cause)?);
         };
         // Yeah this needs to be done properly, so.....
         // thingy
         Ok(Range { lower, upper })
     }
-    fn as_dep_kind(deps: &[String]) -> Result<Vec<DependKind>, WrappedError> {
+    fn as_dep_kind(deps: &[String]) -> Result<Vec<DependKind>, StatefulError> {
         let mut result = Vec::new();
         for dep in deps {
             let val = if let Some(dep) = dep.strip_prefix('!') {
@@ -110,7 +111,8 @@ impl RawPlz {
                 let (name, ver) = dep.split_at(index);
                 DependKind::Specific(DepVer {
                     name: name.to_string(),
-                    range: RawPlz::parse_ver(ver).wrap(location!())?,
+                    range: RawPlz::parse_ver(ver)
+                        .wrap(&json!({"action": "converting dependencies to DependKinds"}))?,
                 })
             } else {
                 DependKind::Latest(dep.to_string())

@@ -1,7 +1,7 @@
-use snafu::location;
+use serde_json::json;
 
 use crate::commands::Command;
-use crate::errors::{Wrapped, WrappedError};
+use crate::errors::{StatefulError, Wrapped};
 use crate::metadata::collect_updates;
 use crate::settings::acquire_lock;
 use crate::statebox::StateBox;
@@ -28,10 +28,11 @@ pub async fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
 async fn internal_run(
     _states: &StateBox,
     _args: Option<&[String]>,
-) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap(location!())? {
+) -> Result<PostAction, StatefulError> {
+    let cause = json!({"runner": "update packages"});
+    if let Some(action) = acquire_lock().await.wrap(&cause)? {
         return Ok(action);
     };
-    collect_updates().await.wrap(location!())?;
+    collect_updates().await.wrap(&cause)?;
     Ok(PostAction::Return)
 }

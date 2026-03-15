@@ -1,7 +1,7 @@
-use snafu::location;
+use serde_json::json;
 
 use crate::commands::Command;
-use crate::errors::{Wrapped, WrappedError};
+use crate::errors::{StatefulError, Wrapped};
 use crate::metadata::{upgrade_all, upgrade_only, upgrade_packages};
 use crate::settings::acquire_lock;
 use crate::statebox::StateBox;
@@ -28,8 +28,9 @@ pub async fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
 async fn internal_run(
     states: &StateBox,
     args: Option<&[String]>,
-) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap(location!())? {
+) -> Result<PostAction, StatefulError> {
+    let cause = json!({"runner": "upgrade packages"});
+    if let Some(action) = acquire_lock().await.wrap(&cause)? {
         return Ok(action);
     };
     let args = if let Some(args) = args {
@@ -53,9 +54,9 @@ async fn internal_run(
     } else {
         upgrade_only(&args)
     }
-    .wrap(location!())?;
+    .wrap(&cause)?;
     if data.is_empty() {
-        return Ok(PostAction::NothingToDo);
+        return Ok(PostAction::NothingToDo("Nothing to do."));
     }
     println!(
         "The following package(s) will be UPGRADED: \x1B[94m{}\x1B[0m",
@@ -63,14 +64,9 @@ async fn internal_run(
             .fold(String::new(), |acc, x| format!("{acc} {}", x.name))
             .trim()
     );
-    if states.get("yes").is_none_or(|x: &bool| !*x)
-        && !choice("Continue?", true).wrap(location!())?
-    {
-        return Err(WrappedError::Other {
-            error: "Operation aborted by user.".into(),
-            loc: location!(),
-        });
+    if states.get("yes").is_none_or(|x: &bool| !*x) && !choice("Continue?", true).wrap(&cause)? {
+        return Ok(PostAction::NothingToDo("Operation aborted by user."));
     };
-    upgrade_packages(&data).await.wrap(location!())?;
+    upgrade_packages(&data).await.wrap(&cause)?;
     Ok(PostAction::Return)
 }

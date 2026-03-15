@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, location};
+use serde_json::json;
+use snafu::{OptionExt, ResultExt};
 use sqlx::{Decode, Encode, FromRow, Sqlite, SqlitePool, Type, query, query_as};
 use std::fmt::{self, Display, Formatter};
 
-use crate::errors::{OtherSnafu, SQLSnafu, Wrapped, WrappedError};
+use crate::errors::{OtherSnafu, SQLSnafu, StatefulError, Wrapped};
 use crate::metadata::{
     MetaDataKind, Specific,
     processed::PreBuilt,
@@ -25,14 +26,15 @@ pub struct InstalledMetaData {
 }
 
 impl InstalledMetaData {
-    pub async fn open(name: &str, pool: &SqlitePool) -> Result<Option<Self>, WrappedError> {
+    pub async fn open(name: &str, pool: &SqlitePool) -> Result<Option<Self>, StatefulError> {
         query_as::<Sqlite, Self>("SELECT * FROM installed WHERE name = ?")
             .bind(name)
             .fetch_optional(pool)
             .await
             .context(SQLSnafu)
+            .wrap(&json!({"action": "locating package metadata from database", "package": name}))
     }
-    pub async fn write(self, pool: &SqlitePool) -> Result<Option<Self>, WrappedError> {
+    pub async fn write(self, pool: &SqlitePool) -> Result<Option<Self>, StatefulError> {
         query::<Sqlite>("INSERT INTO installed VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(&self.name)
             .bind(&self.kind)
@@ -46,14 +48,17 @@ impl InstalledMetaData {
             .execute(pool)
             .await
             .context(SQLSnafu)
-            .wrap(location!())?;
+            .wrap(
+                &json!({"action": "writing installed package to database", "package": self.name}),
+            )?;
         Ok(Some(self))
     }
     pub async fn clear_dependencies(
         &self,
         specific: &Specific,
         pool: &SqlitePool,
-    ) -> Result<(), WrappedError> {
+    ) -> Result<(), StatefulError> {
+        let cause = json!({"action": "clearing package dependencies", "package": self.name});
         let mut data = self.clone();
         // let index = &data
         //     .dependencies
@@ -81,15 +86,17 @@ impl InstalledMetaData {
                     break;
                 }
             }
-            e_index.context(OtherSnafu {
-                error: format!(
-                    "Dependent `{}` {} not found for package `{}`!",
-                    data.name, data.version, specific.name
-                ),
-            })?
+            e_index
+                .context(OtherSnafu {
+                    error: format!(
+                        "Dependent `{}` {} not found for package `{}`!",
+                        data.name, data.version, specific.name
+                    ),
+                })
+                .wrap(&cause)?
         };
         data.dependencies.0.remove(index);
-        data.write(pool).await.wrap(location!())?;
+        data.write(pool).await.wrap(&cause)?;
         Ok(())
     }
 }
@@ -101,21 +108,25 @@ pub enum InstalledInstallKind {
 }
 
 impl InstalledInstallKind {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
+    fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing bytes to InstalledInstallKind"});
         let mut chars = input.chars();
-        let kind = chars.next().context(OtherSnafu {
-            error: "Missing type identifier!",
-        })?;
+        let kind = chars
+            .next()
+            .context(OtherSnafu {
+                error: "Missing type identifier!",
+            })
+            .wrap(&cause)?;
         let data = chars.collect::<String>();
         match kind as u8 {
-            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap(location!())?)),
+            0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap(&cause)?)),
             1 => Ok(Self::Compilable(
-                InstalledCompilable::parse(&data).wrap(location!())?,
+                InstalledCompilable::parse(&data).wrap(&cause)?,
             )),
-            kind => Err(WrappedError::Other {
-                error: format!("Invalid kind identifier `{kind}`!").into(),
-                loc: location!(),
-            }),
+            kind => Err(StatefulError::new(
+                format!("Invalid kind identifier `{kind}`!"),
+                &cause,
+            )),
         }
     }
 }
@@ -149,7 +160,14 @@ impl<'a> Decode<'a, Sqlite> for InstalledInstallKind {
         value: <Sqlite as sqlx::Database>::ValueRef<'a>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let data: String = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::parse(&data)?)
+        Ok(Self::parse(&data)
+            .wrap(&json!({"action": "decoding cached InstalledInstallKind"}))
+            .map_err(|e| {
+                OtherSnafu {
+                    error: e.to_string(),
+                }
+                .build()
+            })?)
     }
 }
 
@@ -169,10 +187,13 @@ pub struct InstalledCompilable {
 }
 
 impl InstalledCompilable {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
-        let (uninstall, purge) = input.split_once('\x00').context(OtherSnafu {
-            error: "Missing InstalledCompilable field `purge`!",
-        })?;
+    fn parse(input: &str) -> Result<Self, StatefulError> {
+        let (uninstall, purge) = input
+            .split_once('\x00')
+            .context(OtherSnafu {
+                error: "Missing InstalledCompilable field `purge`!",
+            })
+            .wrap(&json!({"action": "parsing InstalledCompilable from bytes"}))?;
         Ok(Self {
             uninstall: uninstall.to_string(),
             purge: purge.to_string(),

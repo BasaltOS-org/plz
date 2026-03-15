@@ -1,6 +1,6 @@
-use snafu::location;
+use serde_json::json;
 
-use crate::errors::{Wrapped, WrappedError};
+use crate::errors::{StatefulError, Wrapped};
 use crate::flags::Flag;
 use crate::settings::remove_lock;
 use crate::statebox::StateBox;
@@ -193,9 +193,9 @@ impl Command {
             if let Err(e) = self
                 .handle_post_action(self.command_func.run(&self.states, Some(&args)).await)
                 .await
-                .wrap(location!())
+                .wrap(&json!({"action": "running command"}))
             {
-                println!("{e:?}")
+                println!("{e}")
             };
         }
     }
@@ -317,8 +317,12 @@ impl Command {
         }
     }
 
-    async fn handle_post_action(&self, action: PostAction) -> Result<(), WrappedError> {
-        remove_lock().await.wrap(location!())?;
+    async fn handle_post_action(&self, action: PostAction) -> Result<(), StatefulError> {
+        if action != PostAction::Elevate {
+            remove_lock()
+                .await
+                .wrap(&json!({"action": "handling post action"}))?;
+        }
         match action {
             PostAction::Elevate => {
                 println!(
@@ -343,9 +347,10 @@ impl Command {
                 println!(
                     "\x1B[2K\rOperation failed! Reported Error: \"\x1B[91m{fault}\x1B[0m\"\n\x1B[91m=== YOU MAY HAVE BROKEN PACKAGES! ===\x1B[0m",
                 );
+                std::process::exit(1);
             }
             PostAction::GetHelp => println!("{}", self.help()),
-            PostAction::NothingToDo => println!("\x1B[95mNothing to do.\x1B[0m"),
+            PostAction::NothingToDo(reason) => println!("\x1B[95m{reason}\x1B[0m"),
             PostAction::PullSources => {
                 match choice("\x1B[2K\rMissing sources.txt! Try pull them now?", false) {
                     Err(message) => println!("{message}"),

@@ -1,8 +1,9 @@
-use snafu::{OptionExt, location};
+use serde_json::json;
+use snafu::OptionExt;
 use sqlx::{Decode, Encode, Sqlite, Type, error::BoxDynError};
 use std::fmt::{self, Display, Formatter};
 
-use crate::errors::{OtherSnafu, WrappedError};
+use crate::errors::{OtherSnafu, StatefulError, Wrapped};
 
 pub mod apt;
 pub mod plz;
@@ -14,17 +15,22 @@ pub enum MetaDataKind {
 }
 
 impl MetaDataKind {
-    fn parse(input: &str) -> Result<Self, WrappedError> {
-        let kind = input.chars().next().context(OtherSnafu {
-            error: "Missing type identifier!",
-        })?;
+    fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing MetadataKind from bytes"});
+        let kind = input
+            .chars()
+            .next()
+            .context(OtherSnafu {
+                error: "Missing type identifier!",
+            })
+            .wrap(&cause)?;
         match kind as u8 {
             0 => Ok(Self::Plz),
             1 => Ok(Self::Apt),
-            kind => Err(WrappedError::Other {
-                error: format!("Invalid kind identifier `{kind}`!").into(),
-                loc: location!(),
-            }),
+            kind => Err(StatefulError::new(
+                format!("Invalid kind identifier `{kind}`!"),
+                &cause,
+            )),
         }
     }
 }
@@ -65,6 +71,13 @@ impl<'a> Encode<'a, Sqlite> for MetaDataKind {
 impl<'a> Decode<'a, Sqlite> for MetaDataKind {
     fn decode(value: <Sqlite as sqlx::Database>::ValueRef<'a>) -> Result<Self, BoxDynError> {
         let data: String = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::parse(&data)?)
+        Ok(Self::parse(&data)
+            .wrap(&json!({"action": "decoding metadata"}))
+            .map_err(|e| {
+                OtherSnafu {
+                    error: e.to_string(),
+                }
+                .build()
+            })?)
     }
 }

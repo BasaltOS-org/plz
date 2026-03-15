@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use snafu::location;
+use serde_json::json;
 use std::cmp::Ordering;
 
-use crate::errors::WrappedError;
+use crate::errors::StatefulError;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Version {
@@ -14,7 +14,8 @@ pub struct Version {
 }
 
 impl Version {
-    pub fn parse(src: &str) -> Result<Self, WrappedError> {
+    pub fn parse(src: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing Version from bytes"});
         let (src, build) = src
             .split_once('+')
             .map(|x| (x.0, Some(x.1.to_string())))
@@ -31,10 +32,7 @@ impl Version {
                         if split.len() >= 3 {
                             if let Ok(patch) = split[2].parse::<usize>() {
                                 if split.len() > 3 {
-                                    Err(WrappedError::Other {
-                                        error: "Two many segments in version!".into(),
-                                        loc: location!(),
-                                    })
+                                    Err(StatefulError::new("Two many segments in version!", &cause))
                                 } else {
                                     Ok(Self {
                                         major,
@@ -45,14 +43,10 @@ impl Version {
                                     })
                                 }
                             } else {
-                                Err(WrappedError::Other {
-                                    error: format!(
-                                        "Expected patch to be a number, got `{}`!",
-                                        split[1]
-                                    )
-                                    .into(),
-                                    loc: location!(),
-                                })
+                                Err(StatefulError::new(
+                                    format!("Expected patch to be a number, got `{}`!", split[1]),
+                                    &cause,
+                                ))
                             }
                         } else {
                             Ok(Self {
@@ -64,11 +58,10 @@ impl Version {
                             })
                         }
                     } else {
-                        Err(WrappedError::Other {
-                            error: format!("Expected minor to be a number, got `{}`!", split[1])
-                                .into(),
-                            loc: location!(),
-                        })
+                        Err(StatefulError::new(
+                            format!("Expected minor to be a number, got `{}`!", split[1]),
+                            &cause,
+                        ))
                     }
                 } else {
                     Ok(Self {
@@ -80,16 +73,13 @@ impl Version {
                     })
                 }
             } else {
-                Err(WrappedError::Other {
-                    error: format!("Expected major to be a number, got `{}`!", split[0]).into(),
-                    loc: location!(),
-                })
+                Err(StatefulError::new(
+                    format!("Expected major to be a number, got `{}`!", split[0]),
+                    &cause,
+                ))
             }
         } else {
-            Err(WrappedError::Other {
-                error: "A version must be specified!".into(),
-                loc: location!(),
-            })
+            Err(StatefulError::new("A version must be specified!", &cause))
         }
     }
 }
