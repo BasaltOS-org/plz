@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, location};
+use serde_json::json;
+use snafu::OptionExt;
 use sqlx::{Decode, Encode, Sqlite, SqlitePool, Type};
 use std::{
     collections::HashSet,
     fmt::{self, Display, Formatter},
 };
 
-use crate::errors::{OtherSnafu, Wrapped, WrappedError};
+use crate::errors::{OtherSnafu, StatefulError, Wrapped, WrappedWith};
 use crate::metadata::{
     DepVer, InstallPackage, Specific, get_installed_metadata, processed::ProcessedMetaData,
 };
@@ -56,20 +57,21 @@ impl DependKind {
         prior: &mut HashSet<Specific>,
         pool: &SqlitePool,
     ) -> Result<Vec<InstallPackage>, StatefulError> {
+        let cause = json!({"action": "converting in batch DependKinds to InstalledPackages"});
         let mut result = Vec::new();
         for dep in deps.0.iter() {
             let dep = match dep {
                 Self::Latest(latest) => {
                     ProcessedMetaData::get_metadata(latest, None, sources, true, pool)
                         .await
-                        .wrap(location!())?
+                        .wrap(&cause)?
                 }
                 Self::Specific(dep_ver) => {
                     let specific = dep_ver
                         .clone()
                         .pull_metadata(Some(sources), true, pool)
                         .await
-                        .wrap(location!())?;
+                        .wrap(&cause)?;
                     ProcessedMetaData::get_metadata(
                         &specific.name,
                         Some(&specific.version.to_string()),
@@ -78,7 +80,7 @@ impl DependKind {
                         pool,
                     )
                     .await
-                    .wrap(location!())?
+                    .wrap(&cause)?
                 }
                 Self::Volatile(volatile) => {
                     if which(volatile) {
@@ -86,19 +88,19 @@ impl DependKind {
                     } else {
                         ProcessedMetaData::get_metadata(volatile, None, sources, true, pool)
                             .await
-                            .wrap(location!())?
+                            .wrap(&cause)?
                     }
                 }
             };
             let specific = Specific {
                 name: dep.name.to_string(),
-                version: Version::parse(&dep.version).wrap(location!())?,
+                version: Version::parse(&dep.version).wrap(&cause)?,
             };
             if !prior.contains(&specific) {
                 prior.insert(specific);
                 let child = Box::pin(dep.get_depends(sources, prior, pool))
                     .await
-                    .wrap(location!())?;
+                    .wrap(&cause)?;
                 result.push(child);
             }
         }
@@ -191,18 +193,22 @@ impl DependKind {
     }
     fn parse(input: &str) -> Result<Self, StatefulError> {
         let mut chars = input.chars();
-        let kind = chars.next().context(OtherSnafu {
-            error: "Missing type identifier!",
-        })?;
+        let kind = chars
+            .next()
+            .context(OtherSnafu {
+                error: "Missing type identifier!",
+            })
+            .wrap()?;
         let data = chars.collect::<String>();
         match kind as u8 {
             1 => Ok(Self::Latest(data)),
-            2 => Ok(Self::Specific(DepVer::parse(&data).wrap(location!())?)),
+            2 => Ok(Self::Specific(
+                DepVer::parse(&data).wrap(&json!({"action": "parsing bytes to DependKind"}))?,
+            )),
             3 => Ok(Self::Volatile(data)),
-            kind => Err(WrappedError::Other {
-                error: format!("Invalid kind identifier `{kind}`!").into(),
-                loc: location!(),
-            }),
+            kind => Err(StatefulError::new(format!(
+                "Invalid kind identifier `{kind}`!"
+            ))),
         }
     }
 }
@@ -275,6 +281,13 @@ impl<'a> Decode<'a, Sqlite> for DependKindVec {
         value: <Sqlite as sqlx::Database>::ValueRef<'a>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let data: String = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::parse(&data)?)
+        Ok(Self::parse(&data)
+            .wrap(&json!({"action": "decoding cached DependKind"}))
+            .or_else(|e| {
+                Err(OtherSnafu {
+                    error: e.to_string(),
+                }
+                .build())
+            })?)
     }
 }
