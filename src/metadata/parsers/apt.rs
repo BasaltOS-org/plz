@@ -120,12 +120,7 @@ impl RawApt {
             .await
             .context(TokioIOSnafu)
             .wrap(&cause)?;
-        let result = utils::command(
-            "/usr/bin/ar",
-            &["-x", &deb.to_string_lossy()],
-            Some(&path.1),
-        )
-        .await;
+        let result = utils::command("ar", &["-x", &deb.to_string_lossy()], Some(&path.1)).await;
         if result.is_none_or(|x| x != 0) {
             return Err(StatefulError::new(
                 format!("Failed to unpack package `{name}`!"),
@@ -142,12 +137,9 @@ impl RawApt {
                     "bz2" => "-xjf",
                     _ => continue,
                 };
-                let result = utils::command(
-                    "/usr/bin/tar",
-                    &[arg, &file_path.to_string_lossy()],
-                    Some(&path.1),
-                )
-                .await;
+                let result =
+                    utils::command("tar", &[arg, &file_path.to_string_lossy()], Some(&path.1))
+                        .await;
                 if result.is_none_or(|x| x != 0) {
                     return Err(StatefulError::new(
                         format!("Failed to untar package `{}`!", file_path.display()),
