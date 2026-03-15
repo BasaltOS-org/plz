@@ -35,7 +35,6 @@ pub struct RawApt {
 impl RawApt {
     pub async fn get_vers(
         source: &str,
-        _code: &str,
         kind: &str,
         prefer: Option<&str>,
         name: &str,
@@ -85,7 +84,6 @@ impl RawApt {
     }
     pub async fn parse(
         source: &str,
-        code: &str,
         kind: &AptKind,
         name: &str,
         version: &str,
@@ -183,16 +181,14 @@ impl RawApt {
                 &cause,
             ));
         }
-        Self::to_processed(&binary, version, source, code, kind, dependent, pool)
+        Self::to_processed(&binary, version, source, kind, dependent, pool)
             .await
             .wrap(&cause)
     }
     pub async fn to_processed(
         binary: &Binary,
         version: &str,
-        // origin: &str,
         source: &str,
-        code: &str,
         kind: &AptKind,
         dependent: bool,
         pool: &SqlitePool,
@@ -228,7 +224,6 @@ impl RawApt {
             version: version.to_string(),
             origin: settings::OriginKind::Apt {
                 source: source.to_string(),
-                code: code.to_string(),
                 kind: kind.clone(),
             },
             dependent,

@@ -136,16 +136,9 @@ impl SettingsJson {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum OriginKind {
-    Apt {
-        source: String,
-        code: String,
-        kind: AptKind,
-    },
+    Apt { source: String, kind: AptKind },
     Plz(String),
-    Github {
-        user: String,
-        repo: String,
-    },
+    Github { user: String, repo: String },
 }
 
 impl OriginKind {
@@ -159,9 +152,8 @@ impl OriginKind {
         match kind as u8 {
             0 => {
                 let mut splits = data.split(' ');
-                let ((source, code), kind) = splits
+                let (source, kind) = splits
                     .next()
-                    .zip(splits.next())
                     .zip(splits.next())
                     .context(OtherSnafu {
                         error: "Missing required APT fields!",
@@ -176,7 +168,6 @@ impl OriginKind {
                 };
                 Ok(Self::Apt {
                     source: source.to_string(),
-                    code: code.to_string(),
                     kind,
                 })
             }
@@ -204,8 +195,8 @@ impl OriginKind {
 impl Display for OriginKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&match self {
-            Self::Apt { source, code, kind } => {
-                format!("\x00{source} {code} {kind}")
+            Self::Apt { source, kind } => {
+                format!("\x00{source} {kind}")
             }
             Self::Plz(plz) => format!("\x01{plz}"),
             Self::Github { user, repo } => format!("\x02{user} {repo}"),

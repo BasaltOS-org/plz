@@ -195,11 +195,7 @@ pub async fn get_pool() -> Result<SqlitePool, StatefulError> {
     // }
 }
 
-pub async fn get_apt_pool(
-    source: &str,
-    code: &str,
-    kind: &str,
-) -> Result<SqlitePool, StatefulError> {
+pub async fn get_apt_pool(source: &str, kind: &str) -> Result<SqlitePool, StatefulError> {
     let cause = json!({"action": "creating APT database pool"});
     let path = PathBuf::from(format!("{LOC_DIR}/apt.db"));
     let options = SqliteConnectOptions::from_str(&path.to_string_lossy())

@@ -442,8 +442,8 @@ impl ProcessedMetaData {
                     // thingy
                     println!("Github is not implemented yet!");
                 }
-                OriginKind::Apt { source, code, kind } => {
-                    let vers = RawApt::get_vers(source, code, &kind.to_string(), None, name).await;
+                OriginKind::Apt { source, kind } => {
+                    let vers = RawApt::get_vers(source, &kind.to_string(), None, name).await;
                     let Some(ver) = (if let Some(version) = version {
                         vers.into_iter().find(|x| x.1.to_string() == version)
                     } else {
@@ -453,7 +453,7 @@ impl ProcessedMetaData {
                     }) else {
                         continue;
                     };
-                    metadata = RawApt::parse(source, code, kind, name, &ver.0, dependent, pool)
+                    metadata = RawApt::parse(source, kind, name, &ver.0, dependent, pool)
                         .await
                         .wrap(&cause);
                     break;
