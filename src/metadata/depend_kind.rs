@@ -7,12 +7,13 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use crate::errors::{OtherSnafu, StatefulError, Wrapped, WrappedWith};
-use crate::metadata::{
-    DepVer, InstallPackage, Specific, get_installed_metadata, processed::ProcessedMetaData,
-};
+use crate::metadata::{DepVer, InstallPackage, Specific, processed::ProcessedMetaData};
 use crate::settings::OriginKind;
 use crate::utils::{range::Range, verreq::VerReq, version::Version, which};
+use crate::{
+    errors::{OtherSnafu, StatefulError, Wrapped},
+    metadata::installed::InstalledMetaData,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum DependKind {
@@ -151,11 +152,11 @@ impl DependKind {
     }
     async fn is_installed(&self, pool: &SqlitePool) -> bool {
         match self {
-            Self::Latest(latest) => match get_installed_metadata(latest, pool).await {
+            Self::Latest(latest) => match InstalledMetaData::open(latest, pool).await {
                 Ok(data) => data.is_some(),
                 Err(_) => false,
             },
-            Self::Specific(specific) => match get_installed_metadata(&specific.name, pool).await {
+            Self::Specific(specific) => match InstalledMetaData::open(&specific.name, pool).await {
                 Ok(data) => {
                     if let Some(data) = data {
                         let prior = Version::parse(&data.version).ok().map(|x| {
@@ -176,7 +177,7 @@ impl DependKind {
                 if which(volatile) {
                     true
                 } else {
-                    match get_installed_metadata(volatile, pool).await {
+                    match InstalledMetaData::open(volatile, pool).await {
                         Ok(value) => value.is_some(),
                         Err(_) => false,
                     }
@@ -192,23 +193,23 @@ impl DependKind {
         }
     }
     fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing bytes to DependKind"});
         let mut chars = input.chars();
         let kind = chars
             .next()
             .context(OtherSnafu {
                 error: "Missing type identifier!",
             })
-            .wrap()?;
+            .wrap(&cause)?;
         let data = chars.collect::<String>();
         match kind as u8 {
             1 => Ok(Self::Latest(data)),
-            2 => Ok(Self::Specific(
-                DepVer::parse(&data).wrap(&json!({"action": "parsing bytes to DependKind"}))?,
-            )),
+            2 => Ok(Self::Specific(DepVer::parse(&data).wrap(&cause)?)),
             3 => Ok(Self::Volatile(data)),
-            kind => Err(StatefulError::new(format!(
-                "Invalid kind identifier `{kind}`!"
-            ))),
+            kind => Err(StatefulError::new(
+                format!("Invalid kind identifier `{kind}`!"),
+                &cause,
+            )),
         }
     }
 }

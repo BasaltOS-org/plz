@@ -2,7 +2,7 @@ use serde_json::json;
 use snafu::ResultExt;
 
 use crate::commands::Command;
-use crate::errors::{NetSnafu, StatefulError, Wrapped, WrappedWith};
+use crate::errors::{NetSnafu, StatefulError, Wrapped};
 use crate::flags::Flag;
 use crate::settings::{OriginKind, SettingsJson, acquire_lock};
 use crate::statebox::StateBox;
@@ -62,8 +62,8 @@ To continue anyway, run with flag `\x1B[35m--{LONG_NAME}\x1B[0m`."
 async fn gen_sources() -> Result<(), StatefulError> {
     let cause = json!({"action": "pulling default sources"});
     let url = "https://resources.ditherdude.dev/sources.txt";
-    let sources = reqwest::get(url).await.context(NetSnafu).wrap()?;
-    let sources = sources.text().await.context(NetSnafu).wrap()?;
+    let sources = reqwest::get(url).await.context(NetSnafu).wrap(&cause)?;
+    let sources = sources.text().await.context(NetSnafu).wrap(&cause)?;
     let mut settings = SettingsJson::get_settings().await.wrap(&cause)?;
     for source in sources.trim().split('\n') {
         // thingy; make this actually detect the source type

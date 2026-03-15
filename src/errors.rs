@@ -26,63 +26,50 @@ impl PartialEq for StatefulError {
 
 pub struct StatefulError {
     error: WrappedError,
-    data: Option<Value>,
+    cause: Value,
 }
 
 impl StatefulError {
-    pub fn new(error: impl ToString) -> Self {
+    pub fn new(error: impl ToString, cause: &Value) -> Self {
         Self {
             error: WrappedError::Other {
                 error: error.to_string(),
             },
-            data: None,
+            cause: cause.clone(),
         }
     }
 }
 
 impl Display for StatefulError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(data) = &self.data {
-            f.write_fmt(format_args!("{}: {}", self.error, data))
-        } else {
-            f.write_fmt(format_args!("{}", self.error))
-        }
+        f.write_fmt(format_args!("{}: {}", self.error, self.cause))
     }
-}
-
-pub trait WrappedWith<T> {
-    #[track_caller]
-    fn wrap(self, cause: &Value) -> Result<T, StatefulError>;
 }
 pub trait Wrapped<T> {
     #[track_caller]
-    fn wrap(self) -> Result<T, StatefulError>;
+    fn wrap(self, cause: &Value) -> Result<T, StatefulError>;
 }
 
-impl<T> WrappedWith<T> for Result<T, StatefulError> {
+impl<T> Wrapped<T> for Result<T, StatefulError> {
     fn wrap(self, cause: &Value) -> Result<T, StatefulError> {
         self.map_err(|e| StatefulError {
             error: e.error,
-            data: {
+            cause: {
                 let mut cause = cause.clone();
-                Some(if let Some(e_data) = e.data {
-                    cause
-                        .as_object_mut()
-                        .map(|x| x.insert(String::from("caused_by"), e_data));
-                    cause
-                } else {
-                    cause
-                })
+                cause
+                    .as_object_mut()
+                    .map(|x| x.insert(String::from("caused_by"), e.cause));
+                cause
             },
         })
     }
 }
 
 impl<T> Wrapped<T> for Result<T, WrappedError> {
-    fn wrap(self) -> Result<T, StatefulError> {
+    fn wrap(self, cause: &Value) -> Result<T, StatefulError> {
         self.map_err(|e| StatefulError {
             error: e,
-            data: None,
+            cause: cause.clone(),
         })
     }
 }

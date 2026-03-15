@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::errors::{StatefulError, WrappedWith};
+use crate::errors::{StatefulError, Wrapped};
 use crate::flags::Flag;
 use crate::settings::remove_lock;
 use crate::statebox::StateBox;

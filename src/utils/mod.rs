@@ -5,7 +5,7 @@ use sqlx::{SqlitePool, query, sqlite::SqliteConnectOptions};
 use std::{io::Write, path::PathBuf, str::FromStr};
 use tokio::{fs::DirBuilder, process::Command};
 
-use crate::errors::{SQLSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped, WrappedWith};
+use crate::errors::{SQLSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped};
 use crate::flags::Flag;
 
 pub mod range;
@@ -33,35 +33,33 @@ pub async fn get_dir() -> Result<PathBuf, StatefulError> {
         .create(&path)
         .await
         .context(TokioIOSnafu)
-        .wrap()?;
+        .wrap(&json!({"action": "retrieving application directory"}))?;
     Ok(path)
 }
 
 pub async fn get_metadata_dir() -> Result<PathBuf, StatefulError> {
-    let mut path = get_dir()
-        .await
-        .wrap(&json!({"action": "locating metadata directory"}))?;
+    let cause = json!({"action": "locating metadata directory"});
+    let mut path = get_dir().await.wrap(&cause)?;
     path.push("installed");
     DirBuilder::new()
         .recursive(true)
         .create(&path)
         .await
         .context(TokioIOSnafu)
-        .wrap()?;
+        .wrap(&cause)?;
     Ok(path)
 }
 
 pub async fn get_update_dir() -> Result<PathBuf, StatefulError> {
-    let mut path = get_dir()
-        .await
-        .wrap(&json!({"action": "locating updates directory"}))?;
+    let cause = json!({"action": "locating updates directory"});
+    let mut path = get_dir().await.wrap(&cause)?;
     path.push("updates");
     DirBuilder::new()
         .recursive(true)
         .create(&path)
         .await
         .context(TokioIOSnafu)
-        .wrap()?;
+        .wrap(&cause)?;
     Ok(path)
 }
 
@@ -75,7 +73,7 @@ pub async fn tmpfile() -> Result<(PathBuf, String), StatefulError> {
             .output()
             .await
             .context(TokioIOSnafu)
-            .wrap()?
+            .wrap(&json!({"action": "allocating temporary file"}))?
             .stdout,
     )
     .trim()
@@ -91,7 +89,7 @@ pub async fn tmpdir() -> Result<(PathBuf, String), StatefulError> {
             .output()
             .await
             .context(TokioIOSnafu)
-            .wrap()?
+            .wrap(&json!({"action": "allocating temporary directory"}))?
             .stdout,
     )
     .trim()
@@ -132,7 +130,7 @@ pub fn choice(message: &str, default_yes: bool) -> Result<bool, StatefulError> {
     std::io::stdin()
         .read_line(&mut input)
         .context(StdIOSnafu)
-        .wrap()?;
+        .wrap(&json!({"action": "interactive choice modal"}))?;
     if default_yes {
         if ["no", "n", "false", "f"].contains(&input.to_lowercase().trim()) {
             Ok(false)
@@ -158,15 +156,16 @@ pub async fn command(name: &str, args: &[&str], pwd: Option<&str>) -> Option<i32
 }
 
 pub async fn get_pool() -> Result<SqlitePool, StatefulError> {
+    let cause = json!({"action": "creating database pool"});
     let path = PathBuf::from(format!("{LOC_DIR}/data.db"));
     let options = SqliteConnectOptions::from_str(&path.to_string_lossy())
         .context(SQLSnafu)
-        .wrap()?
+        .wrap(&cause)?
         .create_if_missing(true);
     let db = SqlitePool::connect_with(options)
         .await
         .context(SQLSnafu)
-        .wrap()?;
+        .wrap(&cause)?;
     // if path.exists() {
     //     Ok(db)
     // } else {
@@ -182,7 +181,7 @@ pub async fn get_pool() -> Result<SqlitePool, StatefulError> {
     .execute(&db)
     .await
     .context(SQLSnafu)
-    .wrap()?;
+    .wrap(&cause)?;
     query(
         r"CREATE TABLE IF NOT EXISTS updates (name TEXT, kind TEXT,
         description TEXT, version TEXT, origin BLOB, dependent INTEGER,
@@ -191,7 +190,7 @@ pub async fn get_pool() -> Result<SqlitePool, StatefulError> {
     .execute(&db)
     .await
     .context(SQLSnafu)
-    .wrap()?;
+    .wrap(&cause)?;
     Ok(db)
     // }
 }
@@ -201,20 +200,21 @@ pub async fn get_apt_pool(
     code: &str,
     kind: &str,
 ) -> Result<SqlitePool, StatefulError> {
+    let cause = json!({"action": "creating APT database pool"});
     let path = PathBuf::from(format!("{LOC_DIR}/apt.db"));
     let options = SqliteConnectOptions::from_str(&path.to_string_lossy())
         .context(SQLSnafu)
-        .wrap()?
+        .wrap(&cause)?
         .create_if_missing(true);
     let db = SqlitePool::connect_with(options)
         .await
         .context(SQLSnafu)
-        .wrap()?;
+        .wrap(&cause)?;
     query(r"CREATE TABLE IF NOT EXISTS ? ()")
         .execute(&db)
         .await
         .context(SQLSnafu)
-        .wrap()?;
+        .wrap(&cause)?;
     Ok(db)
 }
 

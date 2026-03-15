@@ -9,13 +9,10 @@ use std::{
 };
 use tokio::{fs::File, io::AsyncWriteExt, process::Command as RunCommand};
 
-use crate::errors::{
-    NetSnafu, OtherSnafu, SQLSnafu, StatefulError, TokioIOSnafu, Wrapped, WrappedWith,
-};
+use crate::errors::{NetSnafu, OtherSnafu, SQLSnafu, StatefulError, TokioIOSnafu, Wrapped};
 use crate::metadata::{
     DepVer, DependKind, InstallPackage, InstalledMetaData, MetaDataKind, Specific,
     depend_kind::DependKindVec,
-    get_installed_metadata,
     installed::{InstalledCompilable, InstalledInstallKind},
     parsers::{apt::RawApt, plz::RawPlz},
     versioning::{self, SpecificVec},
@@ -39,16 +36,17 @@ impl ProcessedInstallKind {
             .context(OtherSnafu {
                 error: "Missing type identifier!",
             })
-            .wrap()?;
+            .wrap(&cause)?;
         let data = chars.collect::<String>();
         match kind as u8 {
             0 => Ok(Self::PreBuilt(PreBuilt::parse(&data).wrap(&cause)?)),
             1 => Ok(Self::Compilable(
                 ProcessedCompilable::parse(&data).wrap(&cause)?,
             )),
-            kind => Err(StatefulError::new(format!(
-                "Invalid kind identifier `{kind}`!"
-            ))),
+            kind => Err(StatefulError::new(
+                format!("Invalid kind identifier `{kind}`!"),
+                &cause,
+            )),
         }
     }
 }
@@ -115,7 +113,7 @@ impl PreBuilt {
             .context(OtherSnafu {
                 error: "Missing PreBuilt field 'configs`!",
             })
-            .wrap()?;
+            .wrap(&json!({"action": "parsing PreBuilt packages from bytes"}))?;
         let critical = critical
             .split('\x00')
             .map(|x| x.to_string())
@@ -158,31 +156,32 @@ pub struct ProcessedCompilable {
 
 impl ProcessedCompilable {
     fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing compilable processable metadata from bytes"});
         let mut splits = input.split('\x00');
         let build = splits
             .next()
             .context(OtherSnafu {
                 error: "Missing ProcessedCompilable field `build`!",
             })
-            .wrap()?;
+            .wrap(&cause)?;
         let install = splits
             .next()
             .context(OtherSnafu {
                 error: "Missing ProcessedCompilable field `install`!",
             })
-            .wrap()?;
+            .wrap(&cause)?;
         let uninstall = splits
             .next()
             .context(OtherSnafu {
                 error: "Missing ProcessedCompilable field `uninstall`!",
             })
-            .wrap()?;
+            .wrap(&cause)?;
         let purge = splits
             .next()
             .context(OtherSnafu {
                 error: "Missing ProcessedCompilable field `purge`!",
             })
-            .wrap()?;
+            .wrap(&cause)?;
         Ok(Self {
             build: build.to_string(),
             install: install.to_string(),
@@ -261,7 +260,7 @@ impl ProcessedMetaData {
                 .context(OtherSnafu {
                     error: format!("Failed to locate `{}`!", self.name),
                 })
-                .wrap()?;
+                .wrap(&cause)?;
             *dependent = Specific {
                 name: dependent.name.to_string(),
                 version: Version::parse(&their_metadata.version).wrap(&cause)?,
@@ -271,26 +270,29 @@ impl ProcessedMetaData {
         let mut file = File::create(&tmpfile.0)
             .await
             .context(TokioIOSnafu)
-            .wrap()?;
+            .wrap(&cause)?;
         let endpoint = match self.origin {
             OriginKind::Plz(plz) => format!("{plz}?v={}", self.version),
             OriginKind::Github { .. } => {
-                return Err(StatefulError::new("debug breakpoint"));
+                return Err(StatefulError::new("debug breakpoint", &cause));
                 // thingy
             }
             OriginKind::Apt { .. } => {
-                return Err(StatefulError::new("debug breakpoint"));
+                return Err(StatefulError::new("debug breakpoint", &cause));
             }
         };
-        let response = reqwest::get(&endpoint).await.context(NetSnafu).wrap()?;
-        let body = response.text().await.context(NetSnafu).wrap()?;
+        let response = reqwest::get(&endpoint)
+            .await
+            .context(NetSnafu)
+            .wrap(&cause)?;
+        let body = response.text().await.context(NetSnafu).wrap(&cause)?;
         file.write_all(body.as_bytes())
             .await
             .context(TokioIOSnafu)
-            .wrap()?;
+            .wrap(&cause)?;
         match self.install_kind {
             ProcessedInstallKind::PreBuilt(_) => {
-                return Err(StatefulError::new("debug breakpoint")); //thingy
+                return Err(StatefulError::new("debug breakpoint", &cause)); //thingy
             }
             ProcessedInstallKind::Compilable(compilable) => {
                 let shell = SettingsJson::get_settings().await.wrap(&cause)?.shell;
@@ -302,7 +304,7 @@ impl ProcessedMetaData {
                     .status()
                     .await
                     .context(TokioIOSnafu)
-                    .wrap()?;
+                    .wrap(&cause)?;
                 let install = compilable.install.replace("{$~}", &tmpfile.1);
                 let mut command = RunCommand::new(shell.to_string());
                 command
@@ -311,7 +313,7 @@ impl ProcessedMetaData {
                     .status()
                     .await
                     .context(TokioIOSnafu)
-                    .wrap()?;
+                    .wrap(&cause)?;
             }
         }
         metadata.write(pool).await.wrap(&cause)?;
@@ -322,6 +324,7 @@ impl ProcessedMetaData {
         Ok(())
     }
     pub async fn write(self, pool: &SqlitePool) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "writing metadata to cache database"});
         // let path = loop {
         //     // let mut path = base.to_path_buf();
         //     path.push(format!("{inc}.json"));
@@ -354,7 +357,7 @@ impl ProcessedMetaData {
             .execute(pool)
             .await
             .context(SQLSnafu)
-            .wrap()?;
+            .wrap(&cause)?;
         // let data = serde_json::to_string(&self)
         //     .context(JSONSnafu {
         //         loc: self.name.to_string(),
@@ -369,6 +372,7 @@ impl ProcessedMetaData {
         Ok(self)
     }
     pub async fn open(name: &str, pool: &SqlitePool) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "reading metadata to cache database"});
         // let mut path = get_update_dir().wrap(location!())?;
         // path.push(format!("{}.json", name));
         // let mut file = File::open(&path)
@@ -394,7 +398,7 @@ impl ProcessedMetaData {
             .fetch_one(pool)
             .await
             .context(SQLSnafu)
-            .wrap()
+            .wrap(&cause)
     }
     pub async fn get_metadata(
         name: &str,
@@ -403,7 +407,8 @@ impl ProcessedMetaData {
         dependent: bool,
         pool: &SqlitePool,
     ) -> Result<Self, StatefulError> {
-        let mut metadata = Err(StatefulError::new("No metadata!"));
+        let cause = json!({"action": "pulling package metadata", "package": name});
+        let mut metadata = Err(StatefulError::new("No metadata!", &cause));
         for source in sources {
             match source {
                 OriginKind::Plz(source) => {
@@ -416,13 +421,13 @@ impl ProcessedMetaData {
                     let body = reqwest::get(endpoint)
                         .await
                         .context(NetSnafu)
-                        .wrap()?
+                        .wrap(&cause)?
                         .text()
                         .await
                         .context(NetSnafu)
-                        .wrap()?;
+                        .wrap(&cause)?;
                     if let Ok(rawplz) = serde_json::from_str::<RawPlz>(&body) {
-                        metadata = rawplz.to_process(dependent);
+                        metadata = rawplz.to_processed(dependent);
                         break;
                     }
                     //     && let Some(processed) = rawplz.process()
@@ -450,7 +455,7 @@ impl ProcessedMetaData {
                     };
                     metadata = RawApt::parse(source, code, kind, name, &ver.0, dependent, pool)
                         .await
-                        .wrap(&json!({"action": "pulling package metadata", "package": name}));
+                        .wrap(&cause);
                     break;
                 }
             }
@@ -485,7 +490,7 @@ impl ProcessedMetaData {
             .execute(pool)
             .await
             .context(SQLSnafu)
-            .wrap()?;
+            .wrap(&json!({"action": "removing cached update metadata"}))?;
         // println!(
         //     "\x1B[33m[WARN] cache for {} already cleared!\x1B[0m",
         //     self.name
@@ -585,43 +590,60 @@ impl ProcessedMetaData {
         }
         for dep in new_deps {
             if let Some(dep_ver) = dep.as_dep_ver() {
+                let cause_outer = json!({"action": "installing package dependencies", "package": self.name, "dependency": dep.name()});
                 let installed_metadata = InstalledMetaData::open(&dep_ver.name, pool)
                     .await
-                    .wrap(&json!({"action": "installing package dependencies", "package": self.name, "dependency": dep.name()}))?
+                    .wrap(&cause)
+                    .wrap(&cause_outer)?
                     .context(OtherSnafu {
                         error: format!("Failed to locate `{}`!", self.name),
                     })
-                    .wrap()?;
+                    .wrap(&cause)
+                    .wrap(&cause_outer)?;
                 let metadata = dep_ver
                     .pull_metadata(Some(sources), installed_metadata.dependent, pool)
                     .await
-                    .wrap(&cause)?;
-                metadata.install_package(pool).await.wrap(&cause)?;
+                    .wrap(&cause)
+                    .wrap(&cause_outer)?;
+                metadata
+                    .install_package(pool)
+                    .await
+                    .wrap(&cause)
+                    .wrap(&cause_outer)?;
             }
         }
         for package in in_place_upgrade {
             if let Some(dep_ver) = package.as_dep_ver() {
+                let cause_outer = json!({"action": "upgrading package dependencies", "package": self.name, "dependency": dep_ver.name});
                 let name = dep_ver.name.to_string();
-                let metadata = get_installed_metadata(&name, pool).await.wrap(&cause)?;
+                let metadata = InstalledMetaData::open(&name, pool).await.wrap(&cause)?;
                 let old_metadata = metadata
                     .context(OtherSnafu {
                         error: "Cannot find data for package `{name}`!",
                     })
-                    .wrap()?;
+                    .wrap(&cause)
+                    .wrap(&cause_outer)?;
                 let metadata = dep_ver
                     .pull_metadata(Some(sources), old_metadata.dependent, pool)
                     .await
-                    .wrap(&cause)?;
+                    .wrap(&cause)
+                    .wrap(&cause_outer)?;
                 if metadata.version != old_metadata.version {
-                    metadata.install_package(pool).await.wrap(&cause)?;
+                    metadata
+                        .install_package(pool)
+                        .await
+                        .wrap(&cause)
+                        .wrap(&cause_outer)?;
                 }
                 let mut metadata = InstalledMetaData::open(&name, pool)
                     .await
-                    .wrap(&cause)?
+                    .wrap(&cause)
+                    .wrap(&cause_outer)?
                     .context(OtherSnafu {
                         error: format!("Failed to locate `{}`!", self.name),
                     })
-                    .wrap()?;
+                    .wrap(&cause)
+                    .wrap(&cause_outer)?;
                 if let Some(found) = metadata
                     .dependents
                     .0
@@ -632,7 +654,7 @@ impl ProcessedMetaData {
                 } else {
                     metadata.dependents.0.push(specific.clone());
                 };
-                metadata.write(pool).await.wrap(&cause)?;
+                metadata.write(pool).await.wrap(&cause).wrap(&cause_outer)?;
             }
         }
         self.clone().install_package(pool).await.wrap(&cause)?;

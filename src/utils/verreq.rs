@@ -3,7 +3,7 @@ use serde_json::json;
 use snafu::OptionExt;
 use std::fmt::Display;
 
-use crate::errors::{OtherSnafu, StatefulError, Wrapped, WrappedWith};
+use crate::errors::{OtherSnafu, StatefulError, Wrapped};
 use crate::utils::{range::Range, version::Version};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -159,28 +159,29 @@ impl VerReq {
         }
     }
     pub fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing bytes as VerReq"});
         let mut chars = input.chars();
         let kind = chars
             .next()
             .context(OtherSnafu {
                 error: "Missing type identifier!",
             })
-            .wrap()?;
+            .wrap(&cause)?;
         let data = chars.collect::<String>();
         match kind as u8 {
             0 => Ok(Self::NoBound),
             kind => {
-                let version =
-                    Version::parse(&data).wrap(&json!({"action": "parsing as version"}))?;
+                let version = Version::parse(&data).wrap(&cause)?;
                 match kind {
                     1 => Ok(Self::Gt(version)),
                     2 => Ok(Self::Ge(version)),
                     3 => Ok(Self::Eq(version)),
                     4 => Ok(Self::Le(version)),
                     5 => Ok(Self::Lt(version)),
-                    kind => Err(StatefulError::new(format!(
-                        "Invalid kind identifier `{kind}`!"
-                    ))),
+                    kind => Err(StatefulError::new(
+                        format!("Invalid kind identifier `{kind}`!"),
+                        &cause,
+                    )),
                 }
             }
         }

@@ -2,7 +2,7 @@ use serde_json::json;
 use snafu::OptionExt;
 
 use crate::commands::Command;
-use crate::errors::{OtherSnafu, StatefulError, Wrapped, WrappedWith};
+use crate::errors::{OtherSnafu, StatefulError, Wrapped};
 use crate::flags::Flag;
 use crate::settings::{SettingsJson, acquire_lock, remove_lock};
 use crate::statebox::StateBox;
@@ -41,6 +41,7 @@ async fn internal_set_handle(
     if acquire_lock().await.wrap(&cause)?.is_some() {
         return Err(StatefulError::new(
             "Did not expect a `PostAction` at this time.",
+            &cause,
         ));
     };
     let settings = SettingsJson::get_settings().await.wrap(&cause)?;
@@ -59,13 +60,13 @@ async fn set_func(
         .context(OtherSnafu {
             error: "Missing an argument!",
         })
-        .wrap()?;
+        .wrap(&cause)?;
     let (key, value) = arg
         .split_once('=')
         .context(OtherSnafu {
             error: "Invalid syntax. please use `--set \"key=value\"`.",
         })
-        .wrap()?;
+        .wrap(&cause)?;
     match key {
         "exec" => {
             let val = if value.is_empty() {
@@ -80,12 +81,12 @@ async fn set_func(
             if states.get("yes").is_none_or(|x: &bool| !*x)
                 && !choice("Proceed?", true).wrap(&cause)?
             {
-                return Err(StatefulError::new("Operation aborted by user."));
+                return Err(StatefulError::new("Operation aborted by user.", &cause));
             }
             settings.exec = val;
         }
         _ => {
-            return Err(StatefulError::new("Unrecognized key {key}!"));
+            return Err(StatefulError::new("Unrecognized key {key}!", &cause));
         }
     }
     settings.set_settings().await.wrap(&cause)?;

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::cmp::Ordering;
 
 use crate::errors::StatefulError;
@@ -14,6 +15,7 @@ pub struct Version {
 
 impl Version {
     pub fn parse(src: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing Version from bytes"});
         let (src, build) = src
             .split_once('+')
             .map(|x| (x.0, Some(x.1.to_string())))
@@ -30,7 +32,7 @@ impl Version {
                         if split.len() >= 3 {
                             if let Ok(patch) = split[2].parse::<usize>() {
                                 if split.len() > 3 {
-                                    Err(StatefulError::new("Two many segments in version!"))
+                                    Err(StatefulError::new("Two many segments in version!", &cause))
                                 } else {
                                     Ok(Self {
                                         major,
@@ -41,10 +43,10 @@ impl Version {
                                     })
                                 }
                             } else {
-                                Err(StatefulError::new(format!(
-                                    "Expected patch to be a number, got `{}`!",
-                                    split[1]
-                                )))
+                                Err(StatefulError::new(
+                                    format!("Expected patch to be a number, got `{}`!", split[1]),
+                                    &cause,
+                                ))
                             }
                         } else {
                             Ok(Self {
@@ -56,10 +58,10 @@ impl Version {
                             })
                         }
                     } else {
-                        Err(StatefulError::new(format!(
-                            "Expected minor to be a number, got `{}`!",
-                            split[1]
-                        )))
+                        Err(StatefulError::new(
+                            format!("Expected minor to be a number, got `{}`!", split[1]),
+                            &cause,
+                        ))
                     }
                 } else {
                     Ok(Self {
@@ -71,13 +73,13 @@ impl Version {
                     })
                 }
             } else {
-                Err(StatefulError::new(format!(
-                    "Expected major to be a number, got `{}`!",
-                    split[0]
-                )))
+                Err(StatefulError::new(
+                    format!("Expected major to be a number, got `{}`!", split[0]),
+                    &cause,
+                ))
             }
         } else {
-            Err(StatefulError::new("A version must be specified!"))
+            Err(StatefulError::new("A version must be specified!", &cause))
         }
     }
 }

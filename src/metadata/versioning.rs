@@ -7,9 +7,9 @@ use std::{
     process::Command,
 };
 
-use crate::errors::{OtherSnafu, SQLSnafu, StatefulError, Wrapped, WrappedWith};
+use crate::errors::{OtherSnafu, SQLSnafu, StatefulError, Wrapped};
 use crate::metadata::{
-    QueuedChanges, get_installed_metadata,
+    QueuedChanges,
     installed::{InstalledInstallKind, InstalledMetaData},
     processed::ProcessedMetaData,
 };
@@ -34,7 +34,7 @@ impl DepVer {
             .context(OtherSnafu {
                 error: format!("Failed to locate `{}`!", self.name),
             })
-            .wrap()?;
+            .wrap(&cause)?;
         Ok(Specific {
             name: metadata.name,
             version: Version::parse(&metadata.version).wrap(&cause)?,
@@ -79,7 +79,7 @@ impl DepVer {
                     println!("Github is not implemented yet!");
                 }
                 OriginKind::Apt { .. } => {
-                    return Err(StatefulError::new("debug breakpoint"));
+                    return Err(StatefulError::new("debug breakpoint", &cause));
                 }
             }
         }
@@ -87,7 +87,7 @@ impl DepVer {
             .context(OtherSnafu {
                 error: format!("Failed to locate `{name}`!"),
             })
-            .wrap()?;
+            .wrap(&cause)?;
 
         match &self.range.lower {
             VerReq::Gt(gt) => versions.retain(|x| x > gt),
@@ -95,9 +95,12 @@ impl DepVer {
             VerReq::Eq(eq) => versions.retain(|x| x == eq),
             VerReq::NoBound => (),
             fuck => {
-                return Err(StatefulError::new(format!(
-                    "Unexpected `lower` version requirement of {fuck:?} for package `{name}`.",
-                )));
+                return Err(StatefulError::new(
+                    format!(
+                        "Unexpected `lower` version requirement of {fuck:?} for package `{name}`.",
+                    ),
+                    &cause,
+                ));
             }
         };
         match &self.range.upper {
@@ -105,9 +108,12 @@ impl DepVer {
             VerReq::Lt(lt) => versions.retain(|x| x < lt),
             VerReq::Eq(_) | VerReq::NoBound => (),
             fuck => {
-                return Err(StatefulError::new(format!(
-                    "Unexpected `upper` version requirement of {fuck:?} for package `{name}`.",
-                )));
+                return Err(StatefulError::new(
+                    format!(
+                        "Unexpected `upper` version requirement of {fuck:?} for package `{name}`.",
+                    ),
+                    &cause,
+                ));
             }
         };
         versions.sort();
@@ -117,20 +123,20 @@ impl DepVer {
             .context(OtherSnafu {
                 error: "debug breakpoint",
             })
-            .wrap()?;
+            .wrap(&cause)?;
         ProcessedMetaData::get_metadata(&name, Some(&ver), &[source], dependent, pool)
             .await
             .wrap(&cause)
     }
     pub fn parse(input: &str) -> Result<Self, StatefulError> {
+        let cause = json!({"action": "parsing into a dependency version"});
         let (name, range) = input
             .split_once(' ')
             .context(OtherSnafu {
                 error: "Missing DepVer field `range`!",
             })
-            .wrap()?;
-        let range =
-            Range::parse(range).wrap(&json!({"action": "parsing into a dependency version"}))?;
+            .wrap(&cause)?;
+        let range = Range::parse(range).wrap(&cause)?;
         Ok(Self {
             name: name.to_string(),
             range,
@@ -229,17 +235,18 @@ impl Specific {
         their_ver: &str,
         pool: &SqlitePool,
     ) -> Result<(), StatefulError> {
+        let cause = json!({"action": "parsing dependent version", "dependent": their_name, "package": self.name});
         let mut data =
             query_as::<Sqlite, InstalledMetaData>("SELECT * FROM installed WHERE name = ?")
                 .bind(&self.name)
                 .fetch_one(pool)
                 .await
                 .context(SQLSnafu)
-                .wrap()?;
+                .wrap(&cause)?;
         if data.version == self.version.to_string() {
             let their_dep = Self {
                 name: their_name.to_string(),
-                version: Version::parse(their_ver).wrap(&json!({"action": "parsing dependent version", "dependent": their_name, "package": self.name}))?,
+                version: Version::parse(their_ver).wrap(&cause)?,
             };
             if let Some(found) = data
                 .dependents
@@ -260,7 +267,7 @@ impl Specific {
                 .execute(pool)
                 .await
                 .context(SQLSnafu)
-                .wrap()?;
+                .wrap(&cause)?;
         }
         Ok(())
         // let (path, data) = get_metadata_path(&self.name)?;
@@ -300,13 +307,14 @@ impl Specific {
         queued: &mut QueuedChanges,
         pool: &SqlitePool,
     ) -> Result<(), StatefulError> {
+        let cause = json!({"action": "collecting package dependents", "package": self.name});
         let data = InstalledMetaData::open(&self.name, pool)
             .await
-            .wrap(&json!({"action": "collecting package dependents", "package": self.name}))?
+            .wrap(&cause)?
             .context(OtherSnafu {
                 error: format!("Failed to locate package `{}`!", self.name),
             })
-            .wrap()?;
+            .wrap(&cause)?;
         if data.version == self.version.to_string() {
             for dependent in &data.dependents.0 {
                 if queued.insert_primary(dependent.clone()) {
@@ -317,10 +325,13 @@ impl Specific {
             }
             Ok(())
         } else {
-            Err(StatefulError::new(format!(
-                "Version {} not found for package `{}`",
-                self.version, self.name
-            )))
+            Err(StatefulError::new(
+                format!(
+                    "Version {} not found for package `{}`",
+                    self.version, self.name
+                ),
+                &cause,
+            ))
         }
     }
     pub async fn remove(
@@ -335,7 +346,7 @@ impl Specific {
             None => &get_pool().await.wrap(&cause)?,
         };
         println!("{} `{}` version {}...", msg, self.name, self.version);
-        let data = get_installed_metadata(&self.name, pool)
+        let data = InstalledMetaData::open(&self.name, pool)
             .await
             .wrap(&cause)?;
         let Some(data) = data else {
@@ -361,7 +372,7 @@ impl Specific {
         }
         match data.install_kind {
             InstalledInstallKind::PreBuilt(_) => {
-                return Err(StatefulError::new("debug breakpoint")); //thingy
+                return Err(StatefulError::new("debug breakpoint", &cause)); //thingy
             }
             InstalledInstallKind::Compilable(compilable) => {
                 let shell = SettingsJson::get_settings().await.wrap(&cause)?.shell;
@@ -379,10 +390,10 @@ impl Specific {
                     .status()
                     .is_ok_and(|x| x.code() == Some(0))
                 {
-                    return Err(StatefulError::new(format!(
-                        "{msg} failed for package `{}`!",
-                        self.name
-                    )))?;
+                    return Err(StatefulError::new(
+                        format!("{msg} failed for package `{}`!", self.name),
+                        &cause,
+                    ))?;
                 }
             }
         }
@@ -391,7 +402,7 @@ impl Specific {
             .execute(pool)
             .await
             .context(SQLSnafu)
-            .wrap()?;
+            .wrap(&cause)?;
         Ok(())
         // fs::remove_file(&path)
         //     .context(IOSnafu {
@@ -401,14 +412,17 @@ impl Specific {
         //     .wrap(location!())
     }
     fn parse(input: &str) -> Result<Self, StatefulError> {
+        let mut cause = json!({"action": "parsing package version"});
         let (name, version) = input
             .split_once(' ')
             .context(OtherSnafu {
                 error: "Missing Specific field `version`!",
             })
-            .wrap()?;
-        let version = Version::parse(version)
-            .wrap(&json!({"action": "parsing package version", "package": name}))?;
+            .wrap(&cause)?;
+        cause
+            .as_object_mut()
+            .map(|x| x.insert(String::from("package"), json!(name)));
+        let version = Version::parse(version).wrap(&cause)?;
         Ok(Self {
             name: name.to_string(),
             version,

@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::commands::Command;
-use crate::errors::{StatefulError, WrappedWith};
+use crate::errors::{StatefulError, Wrapped};
 use crate::metadata::get_local_pkgs;
 use crate::settings::acquire_lock;
 use crate::statebox::StateBox;

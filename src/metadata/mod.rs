@@ -3,7 +3,7 @@ use snafu::{OptionExt, ResultExt};
 use sqlx::{Sqlite, SqlitePool, query_as};
 use std::collections::HashSet;
 
-use crate::errors::{OtherSnafu, SQLSnafu, StatefulError, Wrapped, WrappedWith};
+use crate::errors::{OtherSnafu, SQLSnafu, StatefulError, Wrapped};
 use crate::metadata::{
     depend_kind::DependKind,
     installed::InstalledMetaData,
@@ -19,18 +19,6 @@ pub mod installed;
 pub mod parsers;
 pub mod processed;
 pub mod versioning;
-
-async fn get_installed_metadata(
-    name: &str,
-    pool: &SqlitePool,
-) -> Result<Option<InstalledMetaData>, StatefulError> {
-    query_as::<Sqlite, InstalledMetaData>("SELECT * FROM installed WHERE name = ?")
-        .bind(name)
-        .fetch_optional(pool)
-        .await
-        .context(SQLSnafu)
-        .wrap()
-}
 
 #[derive(Debug)]
 pub struct QueuedChanges {
@@ -146,7 +134,7 @@ impl InstallPackage {
                     )
                     .context(OtherSnafu {
                         error: format!("Common version of dependent `{name}` could not be negotiated by dependencies for package `{self_name}`.")
-                    }).wrap()?;
+                    }).wrap(&cause)?;
                 set.sort_by_key(|x| Version::parse(&x.version).ok());
                 set.reverse();
                 let mut chosen = None;
@@ -167,7 +155,7 @@ impl InstallPackage {
                             "No version of dependent `{name}` could be agreed by dependencies."
                         ),
                     })
-                    .wrap()?;
+                    .wrap(&cause)?;
                 filtered.push(chosen);
             }
         }
@@ -287,7 +275,7 @@ async fn get_local_pkg(
             if root {
                 return Ok(None);
             } else {
-                fault.wrap()?
+                fault.wrap(&cause)?
             }
         }
     };
@@ -359,7 +347,7 @@ pub async fn collect_updates() -> Result<(), StatefulError> {
         .fetch_all(&pool)
         .await
         .context(SQLSnafu)
-        .wrap()?;
+        .wrap(&cause)?;
     // let mut result = Vec::new();
     // let count = children.len();
     // for (i, child) in children.into_iter().enumerate() {
@@ -499,12 +487,12 @@ pub async fn unbind(data: &[(&String, Option<&String>)]) -> Result<(), StatefulE
     let pool = get_pool().await.wrap(&cause)?;
     for bit in data {
         let (dep, ver) = *bit;
-        let data = get_installed_metadata(dep, &pool).await.wrap(&cause)?;
+        let data = InstalledMetaData::open(dep, &pool).await.wrap(&cause)?;
         let mut data = data
             .context(OtherSnafu {
                 error: format!("Cannot find data for package `{dep}`!"),
             })
-            .wrap()?;
+            .wrap(&cause)?;
         if let Some(ver) = ver {
             println!("Unbinding `{dep}` version {ver}...",);
             if data.version == *ver {

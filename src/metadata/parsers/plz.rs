@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::errors::{StatefulError, WrappedWith};
+use crate::errors::{StatefulError, Wrapped};
 use crate::metadata::{
     DepVer, DependKind, depend_kind,
     parsers::MetaDataKind,
@@ -25,7 +25,7 @@ pub struct RawPlz {
 }
 
 impl RawPlz {
-    pub fn to_process(self, dependent: bool) -> Result<ProcessedMetaData, StatefulError> {
+    pub fn to_processed(self, dependent: bool) -> Result<ProcessedMetaData, StatefulError> {
         let origin = if self.origin.starts_with("gh/") {
             let split = self
                 .origin
@@ -39,7 +39,10 @@ impl RawPlz {
                     repo: split[1].clone(),
                 }
             } else {
-                return Err(StatefulError::new("Invalid `origin` format!"));
+                return Err(StatefulError::new(
+                    "Invalid `origin` format!",
+                    &json!({"action": "converting RawPlz to processed metadata", "package": self.name}),
+                ));
             }
         // } else if self.origin.starts_with("https://") {
         //     OriginKind::Url(self.origin.clone())
