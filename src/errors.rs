@@ -68,8 +68,8 @@ impl<T> WrappedWith<T> for Result<T, StatefulError> {
                 Some(if let Some(e_data) = e.data {
                     cause
                         .as_object_mut()
-                        .map(|x| x.insert(String::from("caused_by"), e_data))
-                        .into()
+                        .map(|x| x.insert(String::from("caused_by"), e_data));
+                    cause
                 } else {
                     cause
                 })
