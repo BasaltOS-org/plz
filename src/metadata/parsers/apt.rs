@@ -3,7 +3,8 @@ use debian_control::{
     lossless::{Control, Relations},
 };
 use lazy_regex::regex_captures_iter;
-use snafu::{OptionExt, ResultExt, location};
+use serde_json::json;
+use snafu::{OptionExt, ResultExt};
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use tokio::{
@@ -11,7 +12,9 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
-use crate::errors::{NetSnafu, OtherSnafu, StdIOSnafu, TokioIOSnafu, Wrapped, WrappedError};
+use crate::errors::{
+    NetSnafu, OtherSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped, WrappedWith,
+};
 use crate::metadata::{
     depend_kind::{self, DependKind},
     processed,
@@ -90,25 +93,25 @@ impl RawApt {
         version: &str,
         dependent: bool,
         pool: &SqlitePool,
-    ) -> Result<ProcessedMetaData, WrappedError> {
+    ) -> Result<ProcessedMetaData, StatefulError> {
+        let cause = json!({"action": "parsing package into processable metadata", "package": name});
         let folder = if name.starts_with("lib") && name.len() > 3 {
             name[0..4].to_string()
         } else if !name.is_empty() {
             name[0..1].to_string()
         } else {
-            return Err(WrappedError::Other {
-                error: format!("Invalid requested package name `{name}`!").into(),
-                loc: location!(),
-            });
+            return Err(StatefulError::new(format!(
+                "Invalid requested package name `{name}`!"
+            )));
         };
         let origin = format!("{source}/pool/{kind}/{folder}/{name}");
         let endpoint = format!("{origin}/{version}.deb");
-        let response = reqwest::get(&endpoint).await.context(NetSnafu)?;
-        let body = response.bytes().await.context(NetSnafu)?;
-        let path = tmpdir().await.wrap(location!())?;
+        let response = reqwest::get(&endpoint).await.context(NetSnafu).wrap()?;
+        let body = response.bytes().await.context(NetSnafu).wrap()?;
+        let path = tmpdir().await.wrap(&cause)?;
         let deb = path.0.join("deb");
-        let mut file = File::create(&deb).await.context(TokioIOSnafu)?;
-        file.write_all(&body).await.context(TokioIOSnafu)?;
+        let mut file = File::create(&deb).await.context(TokioIOSnafu).wrap()?;
+        file.write_all(&body).await.context(TokioIOSnafu).wrap()?;
         let result = utils::command(
             "/usr/bin/ar",
             &["-x", &deb.to_string_lossy()],
@@ -116,12 +119,11 @@ impl RawApt {
         )
         .await;
         if result.is_none_or(|x| x != 0) {
-            return Err(WrappedError::Other {
-                error: format!("Failed to unpack package `{name}`!").into(),
-                loc: location!(),
-            });
+            return Err(StatefulError::new(format!(
+                "Failed to unpack package `{name}`!"
+            )));
         }
-        let dir = path.0.read_dir().context(StdIOSnafu)?;
+        let dir = path.0.read_dir().context(StdIOSnafu).wrap()?;
         for entry in dir.flatten() {
             let file_path = entry.path();
             if let Some(Some(ext)) = file_path.extension().map(|x| x.to_str()) {
@@ -138,45 +140,44 @@ impl RawApt {
                 )
                 .await;
                 if result.is_none_or(|x| x != 0) {
-                    return Err(WrappedError::Other {
-                        error: format!("Failed to untar package `{}`!", file_path.display()).into(),
-                        loc: location!(),
-                    });
+                    return Err(StatefulError::new(format!(
+                        "Failed to untar package `{}`!",
+                        file_path.display()
+                    )));
                 }
             }
         }
         let control_p = path.0.join("control");
-        let mut control = File::open(&control_p).await.context(TokioIOSnafu)?;
+        let mut control = File::open(&control_p).await.context(TokioIOSnafu).wrap()?;
         let mut c_data = String::new();
         control
             .read_to_string(&mut c_data)
             .await
-            .context(TokioIOSnafu)?;
+            .context(TokioIOSnafu)
+            .wrap()?;
         let Ok(control) = Control::parse(&c_data).to_result() else {
-            return Err(WrappedError::Other {
-                error: format!(
-                    // "File `{}` is not a valid DEB Control file!",
-                    // control_p.display()
-                    "Not a valid DEB Control file for package `{name}`."
-                )
-                .into(),
-                loc: location!(),
-            })?;
+            return Err(StatefulError::new(format!(
+                // "File `{}` is not a valid DEB Control file!",
+                // control_p.display()
+                "Not a valid DEB Control file for package `{name}`."
+            )))?;
         };
-        let binary = control.binaries().next().context(OtherSnafu {
-            error: format!("Missing data in control file for package `{name}`."),
-        })?;
+        let binary = control
+            .binaries()
+            .next()
+            .context(OtherSnafu {
+                error: format!("Missing data in control file for package `{name}`."),
+            })
+            .wrap()?;
         let arch = Self::get_arch(&binary.architecture().unwrap_or_default());
-        if !arch.is_compatible(name).await.wrap(location!())? {
-            return Err(WrappedError::Other {
-                error: format!("Incompatible machine architecture required by package `{name}`.")
-                    .into(),
-                loc: location!(),
-            });
+        if !arch.is_compatible(name).await.wrap(&cause)? {
+            return Err(StatefulError::new(format!(
+                "Incompatible machine architecture required by package `{name}`."
+            )));
         }
         Self::to_processed(&binary, version, source, code, kind, dependent, pool)
             .await
-            .wrap(location!())
+            .wrap(&cause)
     }
     pub async fn to_processed(
         binary: &Binary,
@@ -187,10 +188,14 @@ impl RawApt {
         kind: &AptKind,
         dependent: bool,
         pool: &SqlitePool,
-    ) -> Result<ProcessedMetaData, WrappedError> {
-        let package = binary.name().context(OtherSnafu {
-            error: "Unnamed binary",
-        })?;
+    ) -> Result<ProcessedMetaData, StatefulError> {
+        let cause = json!({"action": "parsing APT binary package into processable metadata", "package": binary.name()});
+        let package = binary
+            .name()
+            .context(OtherSnafu {
+                error: "Unnamed binary",
+            })
+            .wrap()?;
         let description = binary.description().unwrap_or_default();
         let depends = binary.depends();
         let recommends = binary.recommends();
@@ -198,19 +203,15 @@ impl RawApt {
         let deps = {
             let mut deps = HashSet::new();
             if let Some(depends) = depends {
-                deps.extend(Self::to_depends(&depends, pool).await.wrap(location!())?);
+                deps.extend(Self::to_depends(&depends, pool).await.wrap(&cause)?);
             }
             if let Some(recommends) = recommends {
-                deps.extend(
-                    Self::to_depends(&recommends, pool)
-                        .await
-                        .wrap(location!())?,
-                );
+                deps.extend(Self::to_depends(&recommends, pool).await.wrap(&cause)?);
             }
             // if let Some(suggests) = _suggests {
             //     deps.extend(Self::to_depends(&suggests)?);
             // }
-            DependKind::collapse(deps).context(OtherSnafu{error: "Dependency conflict! The developer wishes you 'Good Luck' on your quest to figure out which dependency it is."})?
+            DependKind::collapse(deps).context(OtherSnafu{error: "Dependency conflict! The developer wishes you 'Good Luck' on your quest to figure out which dependency it is."}).wrap()?
         };
         Ok(ProcessedMetaData {
             name: package,
@@ -243,20 +244,21 @@ impl RawApt {
     async fn to_depends(
         relations: &Relations,
         pool: &SqlitePool,
-    ) -> Result<HashSet<DependKind>, WrappedError> {
+    ) -> Result<HashSet<DependKind>, StatefulError> {
         let mut depends = HashSet::new();
         for versions in relations.to_string().split(",") {
             let mut choices = HashSet::new();
             for version in versions.split("|") {
                 let (version, arch) = version.split_once(":").unwrap_or((version, "any"));
                 let arch = Self::get_arch(arch);
-                if !arch.is_compatible(version).await.wrap(location!())? {
-                    return Err(WrappedError::Other {
-                        error:
-                            "The architecture of this package is incompatible with your hardware."
-                                .into(),
-                        loc: location!(),
-                    });
+                if !arch
+                    .is_compatible(version)
+                    .await
+                    .wrap(&json!({"action": "converting APT relations to DependKinds"}))?
+                {
+                    return Err(StatefulError::new(
+                        "The architecture of this package is incompatible with your hardware.",
+                    ));
                 };
                 let version = version.trim();
                 if let Some((name, ver)) = version.split_once(" )") {
@@ -267,10 +269,10 @@ impl RawApt {
                     });
                     let (op, ver) = full_ver.split_at(2);
                     let Ok(ver) = Version::parse(ver) else {
-                        return Err(WrappedError::Other {
-                            error: format!("Version \"{}\" is not a valid Version!", ver).into(),
-                            loc: location!(),
-                        });
+                        return Err(StatefulError::new(format!(
+                            "Version \"{}\" is not a valid Version!",
+                            ver
+                        )));
                     };
                     match op {
                         ">>" => prior = VerReq::Gt(ver).negotiate(prior),
@@ -279,15 +281,17 @@ impl RawApt {
                         "<<" => prior = VerReq::Lt(ver).negotiate(prior),
                         "<=" => prior = VerReq::Le(ver).negotiate(prior),
                         _ => {
-                            return Err(WrappedError::Other {
-                                error: format!("`{}` is not a valid Version opcode!", op).into(),
-                                loc: location!(),
-                            });
+                            return Err(StatefulError::new(format!(
+                                "`{}` is not a valid Version opcode!",
+                                op
+                            )));
                         }
                     }
-                    let range = prior.context(OtherSnafu {
-                        error: "No mutually agreeable version found!",
-                    })?;
+                    let range = prior
+                        .context(OtherSnafu {
+                            error: "No mutually agreeable version found!",
+                        })
+                        .wrap()?;
                     choices.insert(DependKind::Specific(DepVer {
                         name: name.to_string(),
                         range,

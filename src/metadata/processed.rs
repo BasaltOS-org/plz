@@ -450,7 +450,7 @@ impl ProcessedMetaData {
                     };
                     metadata = RawApt::parse(source, code, kind, name, &ver.0, dependent, pool)
                         .await
-                        .wrap();
+                        .wrap(&json!({"action": "pulling package metadata", "package": name}));
                     break;
                 }
             }
