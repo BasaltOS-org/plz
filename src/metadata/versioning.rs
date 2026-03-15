@@ -207,11 +207,11 @@ impl<'a> Decode<'a, Sqlite> for DepVerVec {
         let data: String = Decode::<Sqlite>::decode(value)?;
         Ok(Self::parse(&data)
             .wrap(&json! ({"action": "decoding dependency versions"}))
-            .or_else(|e| {
-                Err(OtherSnafu {
+            .map_err(|e| {
+                OtherSnafu {
                     error: e.to_string(),
                 }
-                .build())
+                .build()
             })?)
     }
 }
@@ -328,7 +328,7 @@ impl Specific {
         purge: bool,
         pool: Option<&SqlitePool>,
     ) -> Result<(), StatefulError> {
-        let cause = json!({"action": "removing package", "package": self.name, "purge": purge});
+        let cause = json!({"action": "removing package", "package": self.name});
         let msg = if purge { "Purging" } else { "Removing" };
         let pool = match pool {
             Some(pool) => pool,
@@ -484,11 +484,11 @@ impl<'a> Decode<'a, Sqlite> for SpecificVec {
         let data: String = Decode::<Sqlite>::decode(value)?;
         Ok(Self::parse(&data)
             .wrap(&json!({"action": "decoding versions"}))
-            .or_else(|e| {
-                Err(OtherSnafu {
+            .map_err(|e| {
+                OtherSnafu {
                     error: e.to_string(),
                 }
-                .build())
+                .build()
             })?)
     }
 }

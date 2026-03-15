@@ -1,7 +1,7 @@
-use snafu::location;
+use serde_json::json;
 
 use crate::commands::Command;
-use crate::errors::{Wrapped, WrappedError};
+use crate::errors::{StatefulError, WrappedWith};
 use crate::metadata::unbind;
 use crate::settings::acquire_lock;
 use crate::statebox::StateBox;
@@ -28,8 +28,9 @@ pub async fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
 async fn internal_run(
     states: &StateBox,
     args: Option<&[String]>,
-) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap(location!())? {
+) -> Result<PostAction, StatefulError> {
+    let cause = json!({"runner": "unbind packages"});
+    if let Some(action) = acquire_lock().await.wrap(&cause)? {
         return Ok(action);
     };
     let mut args = match args {
@@ -46,6 +47,6 @@ async fn internal_run(
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    unbind(&data).await.wrap(location!())?;
+    unbind(&data).await.wrap(&cause)?;
     Ok(PostAction::Return)
 }

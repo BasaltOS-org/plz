@@ -1,7 +1,7 @@
-use snafu::location;
+use serde_json::json;
 
 use crate::commands::Command;
-use crate::errors::{Wrapped, WrappedError};
+use crate::errors::{StatefulError, WrappedWith};
 use crate::metadata::get_packages;
 use crate::settings::{SettingsJson, acquire_lock};
 use crate::statebox::StateBox;
@@ -28,8 +28,9 @@ pub async fn run(states: &StateBox, args: Option<&[String]>) -> PostAction {
 async fn run_internal(
     states: &StateBox,
     args: Option<&[String]>,
-) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap(location!())? {
+) -> Result<PostAction, StatefulError> {
+    let cause = json!({"runner": "install packages"});
+    if let Some(action) = acquire_lock().await.wrap(&cause)? {
         return Ok(action);
     };
     let mut args = match args {
@@ -37,10 +38,7 @@ async fn run_internal(
         Some(args) => args.iter(),
     };
     print!("Reading sources...");
-    let sources = SettingsJson::get_settings()
-        .await
-        .wrap(location!())?
-        .sources;
+    let sources = SettingsJson::get_settings().await.wrap(&cause)?.sources;
     if sources.is_empty() {
         return Ok(PostAction::PullSources);
     }
@@ -54,7 +52,7 @@ async fn run_internal(
     } else {
         args.for_each(|x| data.push((x, None)));
     }
-    let data = get_packages(&data).await.wrap(location!())?;
+    let data = get_packages(&data).await.wrap(&cause)?;
     println!();
     if data.is_empty() {
         return Ok(PostAction::NothingToDo("Nothing to do."));
@@ -74,13 +72,13 @@ async fn run_internal(
                 .trim()
         );
         if states.get("yes").is_none_or(|x: &bool| !*x)
-            && !choice("Continue?", true).wrap(location!())?
+            && !choice("Continue?", true).wrap(&cause)?
         {
             return Ok(PostAction::NothingToDo("Operation aborted by user."));
         }
     }
     for data in data {
-        data.install().await.wrap(location!())?;
+        data.install().await.wrap(&cause)?;
     }
     Ok(PostAction::Return)
 }

@@ -71,11 +71,11 @@ impl<'a> Decode<'a, Sqlite> for MetaDataKind {
         let data: String = Decode::<Sqlite>::decode(value)?;
         Ok(Self::parse(&data)
             .wrap(&json!({"action": "decoding metdata"}))
-            .or_else(|e| {
-                Err(OtherSnafu {
+            .map_err(|e| {
+                OtherSnafu {
                     error: e.to_string(),
                 }
-                .build())
+                .build()
             })?)
     }
 }

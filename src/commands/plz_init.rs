@@ -1,7 +1,8 @@
-use snafu::{ResultExt, location};
+use serde_json::json;
+use snafu::ResultExt;
 
 use crate::commands::Command;
-use crate::errors::{NetSnafu, Wrapped, WrappedError};
+use crate::errors::{NetSnafu, StatefulError, Wrapped, WrappedWith};
 use crate::flags::Flag;
 use crate::settings::{OriginKind, SettingsJson, acquire_lock};
 use crate::statebox::StateBox;
@@ -39,8 +40,9 @@ pub async fn get_endpoints(states: &StateBox, args: Option<&[String]>) -> PostAc
 async fn internal_get_endpoints(
     states: &StateBox,
     _args: Option<&[String]>,
-) -> Result<PostAction, WrappedError> {
-    if let Some(action) = acquire_lock().await.wrap(location!())? {
+) -> Result<PostAction, StatefulError> {
+    let cause = json!({"runner": "plz initializer"});
+    if let Some(action) = acquire_lock().await.wrap(&cause)? {
         return Ok(action);
     };
     if states.get::<bool>("force").is_none_or(|x| !*x) {
@@ -51,21 +53,22 @@ To continue anyway, run with flag `\x1B[35m--{LONG_NAME}\x1B[0m`."
         );
     } else {
         println!("Pulling sources...");
-        gen_sources().await.wrap(location!())?;
+        gen_sources().await.wrap(&cause)?;
         println!("Done!");
     }
     Ok(PostAction::Return)
 }
 
-async fn gen_sources() -> Result<(), WrappedError> {
+async fn gen_sources() -> Result<(), StatefulError> {
+    let cause = json!({"action": "pulling default sources"});
     let url = "https://resources.ditherdude.dev/sources.txt";
-    let sources = reqwest::get(url).await.context(NetSnafu)?;
-    let sources = sources.text().await.context(NetSnafu)?;
-    let mut settings = SettingsJson::get_settings().await.wrap(location!())?;
+    let sources = reqwest::get(url).await.context(NetSnafu).wrap()?;
+    let sources = sources.text().await.context(NetSnafu).wrap()?;
+    let mut settings = SettingsJson::get_settings().await.wrap(&cause)?;
     for source in sources.trim().split('\n') {
         // thingy; make this actually detect the source type
         let source = OriginKind::Plz(source.to_string());
         settings.sources.push(source);
     }
-    settings.set_settings().await.wrap(location!())
+    settings.set_settings().await.wrap(&cause)
 }
