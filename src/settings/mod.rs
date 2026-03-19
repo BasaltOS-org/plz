@@ -8,13 +8,11 @@ use tokio::{
     time::Duration,
 };
 
+use crate::errors::{JSONSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped};
+use crate::settings::originkind::OriginKindVec;
 use crate::utils::{PostAction, get_dir, is_root, which};
-use crate::{
-    errors::{JSONSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped},
-    settings::originkind::OriginKindVec,
-};
 
-mod originkind;
+pub mod originkind;
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct SettingsJson {
@@ -93,7 +91,7 @@ impl SettingsJson {
             version: env!("SETTINGS_JSON_VERSION").to_string(),
             arch,
             exec: None,
-            sources: Vec::new(),
+            sources: OriginKindVec::default(),
         })
     }
     pub async fn set_settings(self) -> Result<(), StatefulError> {

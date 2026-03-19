@@ -39,7 +39,7 @@ async fn run_internal(
     };
     print!("Reading sources...");
     let sources = SettingsJson::get_settings().await.wrap(&cause)?.sources;
-    if sources.is_empty() {
+    if sources.0.is_empty() {
         return Ok(PostAction::PullSources);
     }
     let mut data = Vec::new();

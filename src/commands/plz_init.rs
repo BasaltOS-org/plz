@@ -4,7 +4,7 @@ use snafu::ResultExt;
 use crate::commands::Command;
 use crate::errors::{NetSnafu, StatefulError, Wrapped};
 use crate::flags::Flag;
-use crate::settings::{OriginKind, SettingsJson, acquire_lock};
+use crate::settings::{SettingsJson, acquire_lock, originkind::OriginKind};
 use crate::statebox::StateBox;
 use crate::utils::PostAction;
 
@@ -70,7 +70,7 @@ async fn gen_sources() -> Result<(), StatefulError> {
         let source = OriginKind::Plz {
             source: source.to_string(),
         };
-        settings.sources.push(source);
+        settings.sources.0.push(source);
     }
     settings.set_settings().await.wrap(&cause)
 }

@@ -7,13 +7,12 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use crate::metadata::{DepVer, InstallPackage, Specific, processed::ProcessedMetaData};
-use crate::settings::OriginKind;
-use crate::utils::{range::Range, verreq::VerReq, version::Version, which};
-use crate::{
-    errors::{OtherSnafu, StatefulError, Wrapped},
-    metadata::installed::InstalledMetaData,
+use crate::errors::{OtherSnafu, StatefulError, Wrapped};
+use crate::metadata::{
+    DepVer, InstallPackage, Specific, installed::InstalledMetaData, processed::ProcessedMetaData,
 };
+use crate::settings::originkind::OriginKind;
+use crate::utils::{range::Range, verreq::VerReq, version::Version, which};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum DependKind {

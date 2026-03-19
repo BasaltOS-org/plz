@@ -12,19 +12,16 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
+use crate::errors::{NetSnafu, OtherSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped};
+use crate::metadata::parsers::MetaDataKind;
 use crate::metadata::{
     depend_kind::{self, DependKind},
     processed,
     processed::{PreBuilt, ProcessedMetaData},
     versioning::DepVer,
 };
-use crate::settings::{self, AptComponent, Arch};
+use crate::settings::{Arch, originkind::OriginKind};
 use crate::utils::{self, range::Range, tmpdir, verreq::VerReq, version::Version};
-use crate::{
-    errors::{NetSnafu, OtherSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped},
-    metadata::parsers::MetaDataKind,
-    settings::OriginKind,
-};
 
 pub struct RawApt {
     package: String,

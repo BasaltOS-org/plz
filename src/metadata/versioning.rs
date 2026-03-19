@@ -13,7 +13,7 @@ use crate::metadata::{
     installed::{InstalledInstallKind, InstalledMetaData},
     processed::ProcessedMetaData,
 };
-use crate::settings::{OriginKind, SettingsJson};
+use crate::settings::{SettingsJson, originkind::OriginKind};
 use crate::utils::{get_pool, range::Range, verreq::VerReq, version::Version};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -49,7 +49,7 @@ impl DepVer {
         let cause = json!({"action": "pulling dependency metadata", "dependency": self.name});
         let sources = match sources {
             Some(sources) => sources,
-            None => &SettingsJson::get_settings().await.wrap(&cause)?.sources,
+            None => &SettingsJson::get_settings().await.wrap(&cause)?.sources.0,
         };
         let mut versions = None;
         let mut g_source = None;

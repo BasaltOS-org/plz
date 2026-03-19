@@ -19,7 +19,7 @@ use crate::metadata::{
 };
 use crate::utils::{tmpfile, version::Version};
 
-use crate::settings::{Arch, OriginKind, SettingsJson};
+use crate::settings::{Arch, SettingsJson, originkind::OriginKind};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum ProcessedInstallKind {

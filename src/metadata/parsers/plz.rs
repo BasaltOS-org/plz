@@ -7,7 +7,7 @@ use crate::metadata::{
     parsers::MetaDataKind,
     processed::{ProcessedCompilable, ProcessedInstallKind, ProcessedMetaData},
 };
-use crate::settings::OriginKind;
+use crate::settings::originkind::OriginKind;
 use crate::utils::{range::Range, verreq::VerReq, version::Version};
 #[derive(Debug, Deserialize)]
 pub struct RawPlz {

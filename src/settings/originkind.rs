@@ -18,7 +18,7 @@ use crate::errors::{OtherSnafu, StatefulError, Wrapped, WrappedError};
 // pub type OriginKindVec = Vec<OriginKind>;
 
 #[derive(Debug, Default, PartialEq)]
-pub struct OriginKindVec(Vec<OriginKind>);
+pub struct OriginKindVec(pub Vec<OriginKind>);
 
 #[derive(Deserialize, Serialize)]
 struct InnerApt<'a> {
@@ -358,7 +358,7 @@ impl<'a> Decode<'a, Sqlite> for OriginKind {
         value: <Sqlite as sqlx::Database>::ValueRef<'a>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let data: &[u8] = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::from_bytes(&data)
+        Ok(Self::from_bytes(data)
             .wrap(&json!({"action": "decoding APT origins from settings"}))
             .map_err(|e| {
                 OtherSnafu {

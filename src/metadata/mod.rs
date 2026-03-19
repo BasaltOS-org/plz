@@ -11,7 +11,7 @@ use crate::metadata::{
     processed::ProcessedMetaData,
     versioning::{DepVer, Specific},
 };
-use crate::settings::{OriginKind, SettingsJson};
+use crate::settings::{SettingsJson, originkind::OriginKind};
 use crate::utils::{get_pool, range::Range, verreq::VerReq, version::Version};
 
 pub mod depend_kind;
@@ -191,7 +191,7 @@ pub async fn get_packages(
     let mut seen = HashSet::new();
     let count = args.len();
     for (i, package) in args.iter().enumerate() {
-        if let Some(data) = get_package(&settings.sources, package, false, &mut seen, &pool)
+        if let Some(data) = get_package(&settings.sources.0, package, false, &mut seen, &pool)
             .await
             .wrap(&cause)?
         {
@@ -471,7 +471,7 @@ pub async fn upgrade_packages(packages: &[ProcessedMetaData]) -> Result<(), Stat
     for package in packages {
         println!("Upgrading `{}`...", package.name);
         package
-            .upgrade_package(&settings.sources, &pool)
+            .upgrade_package(&settings.sources.0, &pool)
             .await
             .wrap(&cause)?;
         package.remove_update_cache(&pool).await.wrap(&cause)?;

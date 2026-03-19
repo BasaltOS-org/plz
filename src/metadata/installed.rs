@@ -10,7 +10,7 @@ use crate::metadata::{
     processed::PreBuilt,
     versioning::{DepVerVec, SpecificVec},
 };
-use crate::settings::OriginKind;
+use crate::settings::originkind::OriginKind;
 
 #[derive(Clone, Debug, Encode, FromRow, PartialEq)]
 pub struct InstalledMetaData {
