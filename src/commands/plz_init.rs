@@ -67,7 +67,9 @@ async fn gen_sources() -> Result<(), StatefulError> {
     let mut settings = SettingsJson::get_settings().await.wrap(&cause)?;
     for source in sources.trim().split('\n') {
         // thingy; make this actually detect the source type
-        let source = OriginKind::Plz(source.to_string());
+        let source = OriginKind::Plz {
+            source: source.to_string(),
+        };
         settings.sources.push(source);
     }
     settings.set_settings().await.wrap(&cause)

@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use snafu::{OptionExt, ResultExt};
-use sqlx::{Decode, Encode, Sqlite, Type};
+use snafu::ResultExt;
 use std::{fmt::Display, io::Write, path::PathBuf, thread::sleep};
 use tokio::{
     fs::File,
@@ -9,8 +8,13 @@ use tokio::{
     time::Duration,
 };
 
-use crate::errors::{JSONSnafu, OtherSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped};
 use crate::utils::{PostAction, get_dir, is_root, which};
+use crate::{
+    errors::{JSONSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped},
+    settings::originkind::OriginKindVec,
+};
+
+mod originkind;
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct SettingsJson {
@@ -19,7 +23,7 @@ pub struct SettingsJson {
     pub version: String,
     pub arch: Arch,
     pub exec: Option<String>,
-    pub sources: Vec<OriginKind>,
+    pub sources: OriginKindVec,
 }
 
 impl SettingsJson {
@@ -132,137 +136,6 @@ impl SettingsJson {
     //         }
     //     }
     // }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub enum OriginKind {
-    Apt { source: String, kind: AptKind },
-    Plz(String),
-    Github { user: String, repo: String },
-}
-
-impl OriginKind {
-    fn parse(input: &str) -> Result<Self, StatefulError> {
-        let cause = json!({"action": "parsing bytes to OriginKind"});
-        let mut chars = input.chars();
-        let kind = chars
-            .next()
-            .ok_or(StatefulError::new("Missing type identifier!", &cause))?;
-        let data = chars.collect::<String>();
-        match kind as u8 {
-            0 => {
-                let mut splits = data.split(' ');
-                let (source, kind) = splits
-                    .next()
-                    .zip(splits.next())
-                    .context(OtherSnafu {
-                        error: "Missing required APT fields!",
-                    })
-                    .wrap(&cause)?;
-                let kind = match kind {
-                    "main" => AptKind::Main,
-                    "multiverse" => AptKind::Multiverse,
-                    "restricted" => AptKind::Restricted,
-                    "universe" => AptKind::Universe,
-                    other => AptKind::Custom(other.to_string()),
-                };
-                Ok(Self::Apt {
-                    source: source.to_string(),
-                    kind,
-                })
-            }
-            1 => Ok(Self::Plz(data.to_string())),
-            2 => {
-                let (user, repo) = data
-                    .split_once(' ')
-                    .context(OtherSnafu {
-                        error: "Missing GH field `repo`!",
-                    })
-                    .wrap(&cause)?;
-                Ok(Self::Github {
-                    user: user.to_string(),
-                    repo: repo.to_string(),
-                })
-            }
-            kind => Err(StatefulError::new(
-                format!("Invalid kind identifier `{kind}`!"),
-                &cause,
-            )),
-        }
-    }
-}
-
-impl Display for OriginKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&match self {
-            Self::Apt { source, kind } => {
-                format!("\x00{source} {kind}")
-            }
-            Self::Plz(plz) => format!("\x01{plz}"),
-            Self::Github { user, repo } => format!("\x02{user} {repo}"),
-        })
-    }
-}
-
-impl Type<Sqlite> for OriginKind {
-    fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
-        <String as Type<Sqlite>>::type_info()
-    }
-}
-
-impl<'a> Encode<'a, Sqlite> for OriginKind {
-    fn encode_by_ref(
-        &self,
-        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'a>,
-    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        <String as Encode<'_, Sqlite>>::encode_by_ref(&self.to_string(), buf)
-    }
-    fn encode(
-        self,
-        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'a>,
-    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
-    where
-        Self: Sized,
-    {
-        <String as Encode<'_, Sqlite>>::encode(self.to_string(), buf)
-    }
-}
-
-impl<'a> Decode<'a, Sqlite> for OriginKind {
-    fn decode(
-        value: <Sqlite as sqlx::Database>::ValueRef<'a>,
-    ) -> Result<Self, sqlx::error::BoxDynError> {
-        let data: String = Decode::<Sqlite>::decode(value)?;
-        Ok(Self::parse(&data)
-            .wrap(&json!({"action": "decoding APT origins from settings"}))
-            .map_err(|e| {
-                OtherSnafu {
-                    error: e.to_string(),
-                }
-                .build()
-            })?)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub enum AptKind {
-    Custom(String),
-    Main,
-    Multiverse,
-    Restricted,
-    Universe,
-}
-
-impl Display for AptKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Custom(c) => c,
-            Self::Main => "main",
-            Self::Multiverse => "multiverse",
-            Self::Restricted => "restricted",
-            Self::Universe => "universe",
-        })
-    }
 }
 
 #[derive(Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]

@@ -58,7 +58,7 @@ impl<T> Wrapped<T> for Result<T, StatefulError> {
                 let mut cause = cause.clone();
                 cause
                     .as_object_mut()
-                    .map(|x| x.insert(String::from("caused_by"), e.cause));
+                    .map(|x| x.insert(String::from("!caused_by"), e.cause));
                 cause
             },
         })

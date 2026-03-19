@@ -223,6 +223,28 @@ pub fn which(name: &str) -> bool {
     false
 }
 
+pub trait SmallEncode {
+    fn encode(&self) -> String;
+    fn decode(s: &str) -> Result<impl ToOwned, StatefulError>;
+}
+
+impl SmallEncode for &[u8] {
+    fn encode(&self) -> String {
+        self.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+    #[allow(refining_impl_trait)]
+    fn decode(s: &str) -> Result<Vec<u8>, StatefulError> {
+        let cause = json!({"action": "parsing string to bytes"});
+        (0..s.len())
+            .step_by(2)
+            .map(|i| {
+                u8::from_str_radix(&s[i..i + 2], 16)
+                    .map_err(|e| return StatefulError::new(e, &cause))
+            })
+            .collect()
+    }
+}
+
 // pub trait FuckWrap<T, E>: Sized {
 //     fn wrap<E2: From<WrappedError>>(self) -> Result<T, E2>;
 // }

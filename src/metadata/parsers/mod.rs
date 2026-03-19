@@ -12,21 +12,23 @@ pub mod plz;
 pub enum MetaDataKind {
     Plz,
     Apt,
+    Github,
 }
 
 impl MetaDataKind {
     fn parse(input: &str) -> Result<Self, StatefulError> {
         let cause = json!({"action": "parsing MetadataKind from bytes"});
-        let kind = input
-            .chars()
+        let mut remaining = input.chars();
+        let kind = remaining
             .next()
             .context(OtherSnafu {
                 error: "Missing type identifier!",
             })
             .wrap(&cause)?;
         match kind as u8 {
-            0 => Ok(Self::Plz),
-            1 => Ok(Self::Apt),
+            0 => Ok(Self::Github),
+            1 => Ok(Self::Plz),
+            2 => Ok(Self::Apt),
             kind => Err(StatefulError::new(
                 format!("Invalid kind identifier `{kind}`!"),
                 &cause,
@@ -38,8 +40,9 @@ impl MetaDataKind {
 impl Display for MetaDataKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Plz => "\x00",
-            Self::Apt => "\x01",
+            Self::Github => "\x00",
+            Self::Plz => "\x01",
+            Self::Apt => "\x02",
         })
     }
 }

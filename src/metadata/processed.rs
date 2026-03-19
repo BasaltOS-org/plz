@@ -272,7 +272,7 @@ impl ProcessedMetaData {
             .context(TokioIOSnafu)
             .wrap(&cause)?;
         let endpoint = match self.origin {
-            OriginKind::Plz(plz) => format!("{plz}?v={}", self.version),
+            OriginKind::Plz { source } => format!("{source}?v={}", self.version),
             OriginKind::Github { .. } => {
                 return Err(StatefulError::new("debug breakpoint", &cause));
                 // thingy
@@ -411,13 +411,8 @@ impl ProcessedMetaData {
         let mut metadata = Err(StatefulError::new("No metadata!", &cause));
         for source in sources {
             match source {
-                OriginKind::Plz(source) => {
-                    // metadata = {
-                    let endpoint = if let Some(version) = version {
-                        format!("{source}/packages/metadata/{name}?v={version}")
-                    } else {
-                        format!("{source}/packages/metadata/{name}")
-                    };
+                OriginKind::Plz { .. } => {
+                    let endpoint = source.to_endpoint(name, version).wrap(&cause)?;
                     let body = reqwest::get(endpoint)
                         .await
                         .context(NetSnafu)
@@ -442,8 +437,9 @@ impl ProcessedMetaData {
                     // thingy
                     println!("Github is not implemented yet!");
                 }
-                OriginKind::Apt { source, kind } => {
-                    let vers = RawApt::get_vers(source, &kind.to_string(), None, name).await;
+                OriginKind::Apt { .. } => {
+                    let endpoint = source.to_endpoint(name, version).wrap(&cause)?;
+                    let vers = RawApt::get_vers(&endpoint, Some(&endpoint), name).await;
                     let Some(ver) = (if let Some(version) = version {
                         vers.into_iter().find(|x| x.1.to_string() == version)
                     } else {
@@ -453,7 +449,7 @@ impl ProcessedMetaData {
                     }) else {
                         continue;
                     };
-                    metadata = RawApt::parse(source, kind, name, &ver.0, dependent, pool)
+                    metadata = RawApt::parse(source, &endpoint, name, &ver.0, dependent, pool)
                         .await
                         .wrap(&cause);
                     break;

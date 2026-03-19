@@ -35,8 +35,8 @@ impl RawPlz {
                 .collect::<Vec<String>>();
             if split.len() == 2 {
                 OriginKind::Github {
-                    user: split[0].clone(),
-                    repo: split[1].clone(),
+                    user: split[0].to_string(),
+                    repo: split[1].to_string(),
                 }
             } else {
                 return Err(StatefulError::new(
@@ -50,7 +50,9 @@ impl RawPlz {
         //     return None;
         // };
         } else {
-            OriginKind::Plz(self.origin.clone())
+            OriginKind::Plz {
+                source: self.origin.to_string(),
+            }
         };
         let build_dependencies =
             depend_kind::DependKindVec(Self::as_dep_kind(&self.build_dependencies)?);

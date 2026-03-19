@@ -12,15 +12,19 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
-use crate::errors::{NetSnafu, OtherSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped};
 use crate::metadata::{
     depend_kind::{self, DependKind},
     processed,
     processed::{PreBuilt, ProcessedMetaData},
     versioning::DepVer,
 };
-use crate::settings::{self, AptKind, Arch};
+use crate::settings::{self, AptComponent, Arch};
 use crate::utils::{self, range::Range, tmpdir, verreq::VerReq, version::Version};
+use crate::{
+    errors::{NetSnafu, OtherSnafu, StatefulError, StdIOSnafu, TokioIOSnafu, Wrapped},
+    metadata::parsers::MetaDataKind,
+    settings::OriginKind,
+};
 
 pub struct RawApt {
     package: String,
@@ -34,22 +38,11 @@ pub struct RawApt {
 }
 impl RawApt {
     pub async fn get_vers(
-        source: &str,
-        kind: &str,
+        endpoint: &str,
         prefer: Option<&str>,
         name: &str,
     ) -> HashSet<(String, Version, Arch)> {
-        // example mirror: https://au.archive.ubuntu.com/ubuntu/pool/universe/
-        // example prefer: https://au.archive.ubuntu.com/ubuntu/pool/universe/n/node/
         let vers = HashSet::new();
-        let folder = if name.starts_with("lib") && name.len() > 3 {
-            name[0..4].to_string()
-        } else if !name.is_empty() {
-            name[0..1].to_string()
-        } else {
-            return vers;
-        };
-        let endpoint = format!("{source}/pool/{kind}/{folder}/{name}");
         let Ok(response) = reqwest::get(endpoint).await else {
             return vers;
         };
@@ -83,26 +76,17 @@ impl RawApt {
             .collect::<HashSet<(String, Version, Arch)>>()
     }
     pub async fn parse(
-        source: &str,
-        kind: &AptKind,
+        source: &OriginKind,
+        // source: &str,
+        // kind: &AptKind,
+        endpoint: &str,
         name: &str,
         version: &str,
         dependent: bool,
         pool: &SqlitePool,
     ) -> Result<ProcessedMetaData, StatefulError> {
         let cause = json!({"action": "parsing package into processable metadata", "package": name});
-        let folder = if name.starts_with("lib") && name.len() > 3 {
-            name[0..4].to_string()
-        } else if !name.is_empty() {
-            name[0..1].to_string()
-        } else {
-            return Err(StatefulError::new(
-                format!("Invalid requested package name `{name}`!"),
-                &cause,
-            ));
-        };
-        let origin = format!("{source}/pool/{kind}/{folder}/{name}");
-        let endpoint = format!("{origin}/{version}.deb");
+        let endpoint = format!("{endpoint}/{version}.deb");
         let response = reqwest::get(&endpoint)
             .await
             .context(NetSnafu)
@@ -133,6 +117,7 @@ impl RawApt {
                     "gz" => "-xzf",
                     "xz" => "-xJf",
                     "bz2" => "-xjf",
+                    "zst" => "-xf",
                     _ => continue,
                 };
                 let result =
@@ -181,15 +166,15 @@ impl RawApt {
                 &cause,
             ));
         }
-        Self::to_processed(&binary, version, source, kind, dependent, pool)
+        Self::to_processed(&binary, version, source, dependent, pool)
             .await
             .wrap(&cause)
     }
     pub async fn to_processed(
         binary: &Binary,
         version: &str,
-        source: &str,
-        kind: &AptKind,
+        source: &OriginKind,
+        // kind: &AptKind,
         dependent: bool,
         pool: &SqlitePool,
     ) -> Result<ProcessedMetaData, StatefulError> {
@@ -219,13 +204,10 @@ impl RawApt {
         };
         Ok(ProcessedMetaData {
             name: package,
-            kind: super::MetaDataKind::Apt,
+            kind: MetaDataKind::Apt,
             description,
             version: version.to_string(),
-            origin: settings::OriginKind::Apt {
-                source: source.to_string(),
-                kind: kind.clone(),
-            },
+            origin: source.clone(),
             dependent,
             build_dependencies: depend_kind::DependKindVec(Vec::new()),
             runtime_dependencies: depend_kind::DependKindVec(deps),

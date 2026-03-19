@@ -56,7 +56,7 @@ impl DepVer {
         let name = self.name;
         for source in sources {
             match source {
-                OriginKind::Plz(plz) => {
+                OriginKind::Plz { source: plz } => {
                     let endpoint = format!("{plz}/package/{name}");
                     let Ok(response) = reqwest::get(endpoint).await else {
                         continue;
